@@ -1,0 +1,25 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  height: 100%;
+  background: #F7F6F4;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+}
+
+#root { height: 100%; }
+
+input, select, textarea, button { font-family: inherit; }
+
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
