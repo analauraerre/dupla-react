@@ -15,6 +15,9 @@ async function findOrCreateSpreadsheet(token) {
   const searchRes = await fetch(`${DRIVE_API}?q=${q}&fields=files(id,name)`, {
     headers: { Authorization: `Bearer ${token}` }
   });
+  if (searchRes.status === 401 || searchRes.status === 403) {
+    throw new Error('AUTH_EXPIRED');
+  }
   const searchData = await searchRes.json();
 
   if (searchData.files && searchData.files.length > 0) {

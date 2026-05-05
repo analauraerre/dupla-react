@@ -1,14 +1,14 @@
 export const C = {
-  coral:"#FF7867", coralL:"#FFF0EE", coralM:"#FFD5CF",
-  sage:"#5BA08A",  sageL:"#EEF6F3",  sageM:"#C2DED7",
-  peach:"#F4A96A", peachL:"#FEF4EB",
-  sky:"#6AABF4",   skyL:"#EBF4FE",
-  lavender:"#9B8FE8", lavL:"#F2F0FD",
-  rose:"#E87FAB",  roseL:"#FDF0F5",
-  gold:"#E8C068",  goldL:"#FDF7EB",
-  gray1:"#1A1A1A", gray2:"#484848", gray3:"#767676",
-  gray4:"#B0B0B0", gray5:"#E8E8E8", gray6:"#F7F6F4",
-  white:"#FFFFFF", border:"#EBEBEB",
+  coral:"#F97316", coralL:"#FFF7ED", coralM:"#FED7AA",   // naranja principal
+  sage:"#65A30D",  sageL:"#F7FEE7",  sageM:"#D9F99D",    // verde oliva (ingresos/positivo)
+  peach:"#FB923C", peachL:"#FFF7ED",                      // naranja claro
+  sky:"#0891B2",   skyL:"#ECFEFF",                        // cyan (tarjetas)
+  lavender:"#A16207", lavL:"#FEF9C3",                     // ámbar oscuro
+  rose:"#DC2626",  roseL:"#FEF2F2",                       // rojo cálido
+  gold:"#D97706",  goldL:"#FFFBEB",                       // ámbar (alertas)
+  gray1:"#1C1917", gray2:"#44403C", gray3:"#78716C",      // grises cálidos
+  gray4:"#A8A29E", gray5:"#E7E5E4", gray6:"#FAFAF9",
+  white:"#FFFFFF", border:"#E7E5E4",
 };
 
 export const DEFAULT_CATEGORIES = [
@@ -40,7 +40,7 @@ export const CURRENCIES = [
 export const MONTHS      = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 export const MONTHS_FULL = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 export const USERS       = ["Ana","Fabio"];
-export const PALETTE     = ["#FF7867","#5BA08A","#F4A96A","#E87FAB","#E8C068","#9B8FE8","#6AABF4","#8ECFC7","#F4B8A3","#B5D5A8"];
+export const PALETTE     = ["#F97316","#65A30D","#FB923C","#D97706","#DC2626","#0891B2","#A16207","#F59E0B","#C2410C","#84CC16"];
 export const ICON_OPTIONS= ["🏠","🛒","🚗","❤️","🍽️","🎬","👗","📚","💡","📦","🐾","✈️","🎓","💊","🏋️","🎮","🎵","📱","🏦","🧴","⚽","🌿","🍺","☕","🎁","🏥","🛠️","🐶","🐱","🍕","💻","🎨"];
 export const PAYMENT_METHODS_FIXED = ["Efectivo","Débito"];
 

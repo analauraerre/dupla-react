@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { C, Sx } from '../../utils/constants';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function CardsTab({ creditCards, expenses, selMonth, selYear, fmt, addCard }) {
+  const { C, Sx } = useTheme();
   const [showAddCard, setShowAddCard] = useState(false);
   const [newCard,     setNewCard]     = useState({ name: '', limit: '' });
 

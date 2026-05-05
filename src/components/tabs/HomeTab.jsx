@@ -1,270 +1,773 @@
-import { useState, useRef } from 'react';
-import { C, Sx, USERS, MONTHS_FULL } from '../../utils/constants';
-import { today, todayStr } from '../../utils/formatters';
-import AreaChartSVG from '../charts/AreaChartSVG';
+import { useState, useEffect, useRef } from 'react';
+import { USERS, MONTHS_FULL } from '../../utils/constants';
+import { useTheme, contrastFg } from '../../context/ThemeContext';
+import { todayStr } from '../../utils/formatters';
+import PieChartSVG from '../charts/PieChartSVG';
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+// Avatar color por posición en USERS — extensible a más usuarios después
+function avatarColor(C, name) {
+  const palette = [C.peach, C.coral, C.sage, C.lavender];
+  const idx = USERS.indexOf(name);
+  return palette[idx] ?? C.gray3;
+}
+
+function Avatar({ C, name, size = 28 }) {
+  const bg = avatarColor(C, name);
+  const initial = (name?.[0] || '?').toUpperCase();
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: bg, color: contrastFg(bg),
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: Math.round(size * 0.42), fontWeight: 500, flexShrink: 0,
+      letterSpacing: '-0.2px',
+    }}>{initial}</div>
+  );
+}
+
+// Label small caps reutilizable
+const Label = ({ C, children }) => (
+  <div style={{
+    fontSize: 11, color: C.gray4, fontWeight: 500,
+    textTransform: 'uppercase', letterSpacing: '1.5px',
+    marginBottom: 6,
+  }}>{children}</div>
+);
+
+// Format integer with es-AR thousand separators
+const fmtInt = n => Math.round(n).toLocaleString('es-AR');
+
+// ── Component ──────────────────────────────────────────────────────────────
 export default function HomeTab({
-  selMonth, selYear, setSelMonth, setSelYear,
+  selMonth, prevMonth,
   categories, incomeCategories, creditCards,
-  filtExp, filtInc, totExp, totInc, totSav, totBudget, balance,
-  effBudgets, expByCat, annualData, daysInMonth, dayNow, projected, alerts,
-  getCat, fmt, fmtK, paymentMethods, notes, noteKey,
-  addExpense, addIncomeQuick, updateNote, saveNote, setTab,
+  filtExp, filtInc, totExp, totExpPrevMonth, expByUser,
+  getCat, fmt,
+  addExpense, addIncomeQuick, setTab,
+  editExpense, editIncome,
 }) {
-  const [qDesc,   setQDesc]   = useState('');
-  const [qAmount, setQAmount] = useState('');
-  const [qCat,    setQCat]    = useState(categories[0]?.name || '');
-  const [qIncCat, setQIncCat] = useState(incomeCategories[0]?.name || '');
-  const [qUser,   setQUser]   = useState('Ana');
-  const [qDate,   setQDate]   = useState(todayStr);
-  const [qMode,   setQMode]   = useState('expense');
-  const [qPay,    setQPay]    = useState('Efectivo');
-  const [qInst,   setQInst]   = useState(1);
-  const [qSuccess, setQSuccess] = useState(false);
-  const [qError,   setQError]   = useState('');
-  const [showCardPicker,    setShowCardPicker]    = useState(false);
-  const [dismissedAlerts,   setDismissedAlerts]   = useState([]);
-  const qDescRef = useRef(null);
+  const { C, Sx } = useTheme();
 
-  const isCard = !['Efectivo','Débito'].includes(qPay);
+  // ── Form state ───────────────────────────────────────────────────────────
+  const [mode,        setMode]        = useState('expense'); // 'expense' | 'income'
+  const [amount,      setAmount]      = useState('');         // string sin formato (solo dígitos)
+  const [description, setDescription] = useState('');
+  const [category,    setCategory]    = useState(categories[0]?.name || '');
+  const [incCategory, setIncCategory] = useState(incomeCategories[0]?.name || '');
+  const [payment,     setPayment]     = useState('Efectivo'); // 'Efectivo' | 'Débito' | 'Tarjeta'
+  const [paidBy,      setPaidBy]      = useState(USERS[0]);
+  const [date,        setDate]        = useState(todayStr);
+  const [paidByOpen,  setPaidByOpen]  = useState(false);
 
-  const submitQuickAdd = () => {
-    if (!qAmount || parseFloat(qAmount) <= 0) { setQError('Ingresá un monto'); return; }
-    setQError('');
-    if (qMode === 'expense') {
-      addExpense({ id: Date.now(), description: qDesc.trim(), amount: parseFloat(qAmount), category: qCat, user: qUser, date: qDate, tags: [], paymentMethod: qPay, installments: parseInt(qInst) || 1 });
-    } else {
-      const d = new Date(qDate);
-      addIncomeQuick({ id: Date.now(), description: qDesc.trim(), amount: parseFloat(qAmount), user: qUser, incomeCategory: qIncCat, month: d.getMonth(), year: d.getFullYear() });
-    }
-    setQDesc(''); setQAmount(''); setQInst(1); setQSuccess(true);
-    setTimeout(() => setQSuccess(false), 1600);
+  // ── Edit recent state ────────────────────────────────────────────────────
+  const [editingRecent, setEditingRecent] = useState(null); // `e-${id}` | `i-${id}` | null
+  const [editRecentForm, setEditRecentForm] = useState(null);
+
+  const openRecentEdit = (m) => {
+    const key = m._type === 'expense' ? `e-${m.id}` : `i-${m.id}`;
+    if (editingRecent === key) { setEditingRecent(null); setEditRecentForm(null); return; }
+    setEditingRecent(key);
+    setEditRecentForm({ ...m });
+  };
+  const closeRecentEdit = () => { setEditingRecent(null); setEditRecentForm(null); };
+  const saveRecentEdit = () => {
+    if (!editRecentForm) return;
+    if (editRecentForm._type === 'expense') editExpense(editRecentForm.id, editRecentForm);
+    else editIncome(editRecentForm.id, editRecentForm);
+    closeRecentEdit();
   };
 
+  // ── Toast + highlight state ──────────────────────────────────────────────
+  const [toast, setToast] = useState(null); // { kind, label, amount } | null
+  const [highlightId, setHighlightId] = useState(null);
+  const toastTimerRef     = useRef(null);
+  const highlightTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    clearTimeout(toastTimerRef.current);
+    clearTimeout(highlightTimerRef.current);
+  }, []);
+
+  const amountNum = parseInt(amount || '0', 10);
+  const isExpanded = amountNum > 0;
+
+  const onAmountChange = (e) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setAmount(digits);
+  };
+
+  // ── Submit ───────────────────────────────────────────────────────────────
+  const handleSubmit = () => {
+    if (amountNum <= 0) return;
+
+    const id = Date.now();
+    if (mode === 'expense') {
+      // If payment is a creditCard id, look up the name; otherwise use as-is
+      const cardMatch = creditCards.find(c => c.id === payment);
+      const pm = cardMatch ? cardMatch.name : payment;
+      addExpense({
+        id,
+        description: description.trim(),
+        amount: amountNum,
+        category,
+        user: paidBy,
+        date,
+        tags: [],
+        paymentMethod: pm,
+        installments: 1,
+      });
+    } else {
+      const d = new Date(date);
+      addIncomeQuick({
+        id,
+        description: description.trim(),
+        amount: amountNum,
+        user: paidBy,
+        incomeCategory: incCategory,
+        month: d.getMonth(),
+        year: d.getFullYear(),
+      });
+    }
+
+    // Toast
+    const detail = description.trim()
+      || (mode === 'expense' ? category : incCategory)
+      || (mode === 'expense' ? 'gasto' : 'ingreso');
+    setToast({ kind: mode, label: detail, amount: amountNum });
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+
+    // Highlight
+    setHighlightId(id);
+    clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightId(null), 2500);
+
+    // Reset form (mantener mode + paidBy + date para flujo rápido)
+    setAmount('');
+    setDescription('');
+  };
+
+  // ── Delta vs mes anterior ────────────────────────────────────────────────
+  let deltaPct = null;
+  if (totExpPrevMonth > 0 && totExp > 0) {
+    deltaPct = Math.round(((totExp - totExpPrevMonth) / totExpPrevMonth) * 100);
+    if (deltaPct === 0) deltaPct = null;
+  }
+  const prevMonthName = MONTHS_FULL[prevMonth]?.toLowerCase() || '';
+
+  // ── Recent movements (combinados, ordenados, top 5) ──────────────────────
+  const recents = [
+    ...filtExp.map(e => ({ ...e, _type: 'expense', _ts: new Date(e.date + 'T00:00:00').getTime() + (e.id % 1000) })),
+    ...filtInc.map(i => ({ ...i, _type: 'income',  _ts: i.id })),
+  ].sort((a, b) => b._ts - a._ts).slice(0, 5);
+
+  // ── Animación para campos expandidos (grupo único) ───────────────────────
+  const expandAnim = {
+    animation: 'dp-expand-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+    opacity: 0,
+  };
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  const greeting = `Hola, ${USERS.join(' & ')}`;
+
   return (
-    <div>
-      {/* Alerts */}
-      {alerts.filter(a => !dismissedAlerts.includes(a.name)).map(a => (
-        <div key={a.name} style={{display:'flex',alignItems:'center',gap:10,background:a.pct>=100?C.coralL:C.goldL,border:`1px solid ${a.pct>=100?C.coralM:C.gold+'55'}`,borderRadius:14,padding:'10px 14px',marginBottom:10}}>
-          <span style={{fontSize:18}}>{a.icon}</span>
-          <div style={{flex:1,fontSize:13,color:C.gray1}}><strong>{a.name}</strong>: {a.pct>=100?`excedido en ${fmt(a.spent-a.budget)}`:`${a.pct}% del presupuesto`}</div>
-          <span style={{fontWeight:800,fontSize:13,color:a.pct>=100?C.coral:C.peach}}>{a.pct}%</span>
-          <button onClick={()=>setDismissedAlerts(d=>[...d,a.name])} style={{width:22,height:22,borderRadius:'50%',border:'none',background:'transparent',cursor:'pointer',fontSize:14,color:a.pct>=100?C.coral:C.peach,flexShrink:0}}>×</button>
-        </div>
-      ))}
+    <div style={{ position: 'relative' }}>
 
-      {/* Quick entry */}
-      <div style={{background:C.white,borderRadius:24,padding:'22px 20px',marginBottom:14,boxShadow:'0 2px 16px rgba(0,0,0,0.07)'}}>
-        <div style={{display:'flex',background:C.gray6,borderRadius:14,padding:4,marginBottom:20,gap:4}}>
-          {[{id:'expense',label:'↓ Egreso',color:C.coral},{id:'income',label:'↑ Ingreso',color:C.sage}].map(m=>(
-            <button key={m.id} onClick={()=>setQMode(m.id)} style={{flex:1,padding:'10px 0',borderRadius:10,border:'none',fontWeight:700,fontSize:14,cursor:'pointer',background:qMode===m.id?C.white:'transparent',color:qMode===m.id?m.color:C.gray3,boxShadow:qMode===m.id?'0 1px 8px rgba(0,0,0,0.08)':'none'}}>{m.label}</button>
-          ))}
-        </div>
-
-        <div style={{textAlign:'center',marginBottom:20}}>
-          <div style={{fontSize:11,fontWeight:600,color:C.gray3,marginBottom:6,textTransform:'uppercase',letterSpacing:1}}>Monto</div>
-          <div style={{position:'relative',display:'inline-flex',alignItems:'center'}}>
-            <span style={{fontSize:26,fontWeight:700,color:C.gray4,marginRight:4}}>$</span>
-            <input type="number" placeholder="0" value={qAmount} onChange={e=>setQAmount(e.target.value)}
-              onKeyDown={e=>{if(e.key==='Enter'&&qDescRef.current){e.preventDefault();qDescRef.current.focus();}}}
-              style={{width:180,border:'none',borderBottom:`2px solid ${qMode==='expense'?C.coral:C.sage}`,background:'transparent',fontSize:36,fontWeight:900,color:C.gray1,textAlign:'center',outline:'none',padding:'0 4px'}}/>
+      {/* ─ Toast (fixed top) ─────────────────────────────────────────────── */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 18, left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 200,
+          background: C.white,
+          border: `0.5px solid ${C.border}`,
+          borderLeft: `3px solid ${C.sage}`,
+          borderRadius: 10,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+          padding: '10px 14px',
+          display: 'flex', alignItems: 'center', gap: 10,
+          minWidth: 260, maxWidth: 'calc(100vw - 32px)',
+          animation: 'dp-toast-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        }}>
+          <div style={{
+            width: 22, height: 22, borderRadius: '50%',
+            background: C.sage, color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 13, flexShrink: 0,
+          }}>✓</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: C.gray1 }}>Listo, lo sumamos</div>
+            <div style={{ fontSize: 11, color: C.gray3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {toast.label} · ${fmtInt(toast.amount)}
+            </div>
           </div>
         </div>
+      )}
 
-        <input ref={qDescRef} style={{...Sx.inp,marginBottom:12,fontSize:15}} placeholder={qMode==='expense'?'¿En qué gastaste? (opcional)':'¿De dónde viene? (opcional)'} value={qDesc} onChange={e=>setQDesc(e.target.value)}/>
-
-        {qMode==='income' && (
-          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-            {incomeCategories.map(c=>(
-              <button key={c.name} onClick={()=>setQIncCat(c.name)} style={{padding:'5px 10px',borderRadius:20,border:`1.5px solid ${qIncCat===c.name?c.color:C.border}`,background:qIncCat===c.name?c.bg:C.white,color:qIncCat===c.name?c.color:C.gray3,fontSize:12,fontWeight:qIncCat===c.name?700:500,cursor:'pointer'}}>
-                {c.icon} {c.name}
-              </button>
-            ))}
+      {/* ─ Welcome banner verde ──────────────────────────────────────────── */}
+      <div style={{
+        background: C.coral,
+        color: '#fff',
+        borderRadius: 14,
+        padding: '20px 18px 28px',
+        marginBottom: 0,
+      }}>
+        <div style={{ fontSize: 14, fontWeight: 500, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.2px' }}>
+          {greeting}
+        </div>
+        <div style={{
+          fontSize: 11, fontWeight: 500,
+          color: 'rgba(255,255,255,0.85)',
+          textTransform: 'uppercase', letterSpacing: '1.5px',
+          marginTop: 14, marginBottom: 4,
+        }}>
+          Total gastado este mes
+        </div>
+        <div style={{
+          fontSize: 32, fontWeight: 500, color: '#fff',
+          letterSpacing: '-1.5px', lineHeight: 1.05,
+        }}>
+          ${fmtInt(totExp)}
+        </div>
+        {deltaPct !== null && (
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 6 }}>
+            {deltaPct > 0 ? '↑' : '↓'} {Math.abs(deltaPct)}% vs {prevMonthName}
           </div>
         )}
+      </div>
 
-        {qMode==='expense' && (
-          <div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:12}}>
-              {categories.slice(0,5).map(c=>(
-                <button key={c.name} onClick={()=>setQCat(c.name)} style={{padding:'5px 10px',borderRadius:20,border:`1.5px solid ${qCat===c.name?c.color:C.border}`,background:qCat===c.name?c.bg:C.white,color:qCat===c.name?c.color:C.gray3,fontSize:12,fontWeight:qCat===c.name?700:500,cursor:'pointer'}}>
-                  {c.icon} {c.name}
-                </button>
-              ))}
-              <select style={{padding:'5px 10px',borderRadius:20,border:`1.5px solid ${!categories.slice(0,5).map(c=>c.name).includes(qCat)?C.coral:C.border}`,background:!categories.slice(0,5).map(c=>c.name).includes(qCat)?C.coralL:C.white,color:!categories.slice(0,5).map(c=>c.name).includes(qCat)?C.coral:C.gray3,fontSize:12,cursor:'pointer'}}
-                value={categories.slice(0,5).map(c=>c.name).includes(qCat)?'':qCat} onChange={e=>e.target.value&&setQCat(e.target.value)}>
-                <option value=''>Más…</option>
-                {categories.slice(5).map(c=><option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-              </select>
+      {/* ─ Floating white card with form ────────────────────────────────── */}
+      <div style={{
+        background: C.white,
+        borderRadius: 14,
+        padding: '18px',
+        marginTop: -16,
+        marginBottom: 20,
+        border: `0.5px solid ${C.border}`,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+        position: 'relative', zIndex: 1,
+      }}>
+
+        {/* Toggle Egreso/Ingreso */}
+        <div style={{
+          display: 'flex',
+          background: C.gray6,
+          borderRadius: 10,
+          padding: 3, gap: 3,
+          marginBottom: 18,
+        }}>
+          {[
+            { id: 'expense', label: '↓ Egreso' },
+            { id: 'income',  label: '↑ Ingreso' },
+          ].map(opt => {
+            const active = mode === opt.id;
+            return (
+              <button key={opt.id} onClick={() => setMode(opt.id)}
+                style={{
+                  flex: 1, padding: '9px 0', borderRadius: 8, border: 'none',
+                  fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                  background: active ? C.white : 'transparent',
+                  color: active ? C.gray1 : C.gray3,
+                  boxShadow: active ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
+                }}>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Amount hero */}
+        <div style={{ textAlign: 'center', marginBottom: isExpanded ? 22 : 14 }}>
+          <Label C={C}>{isExpanded ? 'Monto' : '¿Cuánto gastaste?'}</Label>
+          <div style={{
+            display: 'inline-flex', alignItems: 'baseline',
+            borderBottom: `2px solid ${mode === 'expense' ? C.rose : C.sage}`,
+            padding: '0 8px 4px',
+            minWidth: 200,
+            justifyContent: 'center',
+          }}>
+            <span style={{ fontSize: 28, color: C.gray4, marginRight: 6, fontWeight: 400 }}>$</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={amount ? fmtInt(amountNum) : ''}
+              onChange={onAmountChange}
+              placeholder="0"
+              style={{
+                border: 'none', outline: 'none', background: 'transparent',
+                fontSize: 36, fontWeight: 500, color: C.gray1,
+                textAlign: 'center', width: '100%', maxWidth: 240,
+                padding: 0, letterSpacing: '-1px',
+                fontFamily: 'inherit',
+              }}
+            />
+          </div>
+          {!isExpanded && (
+            <div style={{ fontSize: 12, color: C.gray4, marginTop: 8 }}>
+              Tocá para escribir el monto
+            </div>
+          )}
+        </div>
+
+        {/* Expanded fields */}
+        {isExpanded && (
+          <div style={expandAnim}>
+
+            {/* Descripción */}
+            <div style={{ marginBottom: 16 }}>
+              <Label C={C}>Descripción</Label>
+              <input
+                value={description} onChange={e => setDescription(e.target.value)}
+                placeholder="Ej: compra del finde"
+                style={{ ...Sx.inp }}
+              />
             </div>
 
-            <div style={{marginBottom:12}}>
-              <div style={{fontSize:11,fontWeight:600,color:C.gray3,marginBottom:6,textTransform:'uppercase',letterSpacing:0.8}}>Medio de pago</div>
-              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                {['Efectivo','Débito'].map(pm=>{
-                  const isSelected=qPay===pm;
-                  return <button key={pm} onClick={()=>{setQPay(pm);setQInst(1);setShowCardPicker(false);}} style={{padding:'6px 12px',borderRadius:20,border:`1.5px solid ${isSelected?C.sage:C.border}`,background:isSelected?C.sageL:C.white,color:isSelected?C.sage:C.gray3,fontSize:12,fontWeight:isSelected?700:500,cursor:'pointer'}}>{pm==='Efectivo'?'💵 ':'🏦 '}{pm}</button>;
-                })}
-                {creditCards.length===0?(
-                  <button disabled style={{padding:'6px 12px',borderRadius:20,border:`1.5px dashed ${C.border}`,background:C.gray6,color:C.gray4,fontSize:12,cursor:'pointer'}} title="Primero agregá una tarjeta">💳 Tarjeta →</button>
-                ):(
-                  <div style={{position:'relative'}}>
-                    <button onClick={()=>setShowCardPicker(v=>!v)} style={{padding:'6px 12px',borderRadius:20,border:`1.5px solid ${isCard?C.lavender:C.border}`,background:isCard?C.lavL:C.white,color:isCard?C.lavender:C.gray3,fontSize:12,fontWeight:isCard?700:500,cursor:'pointer'}}>
-                      💳 {isCard?qPay:'Tarjeta'} {showCardPicker?'▲':'▼'}
+            {/* Categorías */}
+            <div style={{ marginBottom: 16 }}>
+              <Label C={C}>{mode === 'expense' ? 'Categoría' : 'Origen'}</Label>
+              <div style={{
+                display: 'flex', gap: 6, overflowX: 'auto',
+                paddingBottom: 4,
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+              }}>
+                {(mode === 'expense' ? categories : incomeCategories).map(c => {
+                  const active = (mode === 'expense' ? category : incCategory) === c.name;
+                  return (
+                    <button
+                      key={c.name}
+                      onClick={() => mode === 'expense' ? setCategory(c.name) : setIncCategory(c.name)}
+                      style={{
+                        flexShrink: 0,
+                        padding: '8px 14px',
+                        borderRadius: 9999,
+                        border: `0.5px solid ${active ? C.peach : C.border}`,
+                        background: active ? C.peachL : C.white,
+                        color: active ? C.peachD : C.gray2,
+                        fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}>
+                      {c.icon} {c.name}
                     </button>
-                    {showCardPicker&&(
-                      <div style={{position:'absolute',top:'calc(100% + 4px)',left:0,background:C.white,borderRadius:14,boxShadow:'0 4px 20px rgba(0,0,0,0.12)',border:`1px solid ${C.border}`,zIndex:30,minWidth:160,padding:6}}>
-                        {creditCards.map(card=>(
-                          <button key={card.id} onClick={()=>{setQPay(card.name);setShowCardPicker(false);}} style={{display:'block',width:'100%',padding:'9px 12px',border:'none',background:qPay===card.name?C.lavL:'transparent',color:qPay===card.name?C.lavender:C.gray1,fontSize:13,fontWeight:qPay===card.name?700:500,cursor:'pointer',borderRadius:10,textAlign:'left'}}>
-                            💳 {card.name}
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Forma de pago — solo en expense */}
+            {mode === 'expense' && (
+              <div style={{ marginBottom: 16 }}>
+                <Label C={C}>Forma de pago</Label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'Efectivo', label: 'Efectivo', icon: '💵' },
+                    { id: 'Débito',   label: 'Débito',   icon: '🏦' },
+                    ...creditCards.map(card => ({ id: card.id, label: card.name, icon: '💳' })),
+                  ].map(pm => {
+                    const active = payment === pm.id;
+                    return (
+                      <button key={pm.id}
+                        onClick={() => setPayment(pm.id)}
+                        style={{
+                          padding: '9px 14px',
+                          borderRadius: 9999,
+                          border: `0.5px solid ${active ? C.coral : C.border}`,
+                          background: active ? C.coralL : C.white,
+                          color: active ? C.sky : C.gray2,
+                          fontSize: 13, fontWeight: 500,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}>
+                        {pm.icon} {pm.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Quién pagó + Fecha */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+
+              {/* Quién pagó */}
+              <div>
+                <Label C={C}>{mode === 'expense' ? 'Pagó' : 'Cobra'}</Label>
+                <div style={{ position: 'relative' }}>
+                  <button onClick={() => setPaidByOpen(v => !v)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: 10,
+                      border: `0.5px solid ${C.border}`,
+                      background: C.white,
+                      cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      fontSize: 13, fontWeight: 500, color: C.gray1,
+                    }}>
+                    <Avatar C={C} name={paidBy} size={22} />
+                    <span style={{ flex: 1, textAlign: 'left' }}>{paidBy}</span>
+                    <span style={{ color: C.gray4, fontSize: 10 }}>▾</span>
+                  </button>
+                  {paidByOpen && (
+                    <>
+                      <div
+                        onClick={() => setPaidByOpen(false)}
+                        style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                      />
+                      <div style={{
+                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+                        background: C.white, borderRadius: 10,
+                        border: `0.5px solid ${C.border}`,
+                        boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+                        padding: 4, zIndex: 41,
+                        animation: 'dupla-rise 0.18s ease forwards',
+                      }}>
+                        {USERS.map(u => (
+                          <button key={u}
+                            onClick={() => { setPaidBy(u); setPaidByOpen(false); }}
+                            style={{
+                              width: '100%', padding: '8px 10px', border: 'none',
+                              background: paidBy === u ? C.gray6 : 'transparent',
+                              borderRadius: 8, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', gap: 8,
+                              fontSize: 13, fontWeight: 500, color: C.gray1,
+                              textAlign: 'left',
+                            }}>
+                            <Avatar C={C} name={u} size={22} />
+                            {u}
                           </button>
                         ))}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Fecha */}
+              <div>
+                <Label C={C}>Fecha</Label>
+                <div style={{
+                  border: `0.5px solid ${C.border}`,
+                  borderRadius: 10,
+                  background: C.white,
+                  padding: '8px 12px',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  position: 'relative',
+                }}>
+                  <span style={{ fontSize: 14 }}>📅</span>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: C.gray1, flex: 1 }}>
+                    {date === todayStr ? 'Hoy' : new Date(date + 'T00:00:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+                  </span>
+                  <span style={{ color: C.gray4, fontSize: 10 }}>▾</span>
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={e => setDate(e.target.value)}
+                    style={{
+                      position: 'absolute', inset: 0,
+                      opacity: 0, cursor: 'pointer',
+                      width: '100%', height: '100%',
+                      border: 'none', background: 'transparent',
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
-            {isCard&&(
-              <div style={{marginBottom:12,background:C.lavL,borderRadius:14,padding:'12px 14px',border:`1px solid ${C.lavender}33`}}>
-                <div style={{fontSize:11,fontWeight:600,color:C.lavender,marginBottom:8,textTransform:'uppercase',letterSpacing:0.8}}>¿En cuántas cuotas?</div>
-                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                  {[1,2,3,6,9,12,18,24].map(n=>(
-                    <button key={n} onClick={()=>setQInst(n)} style={{width:42,height:36,borderRadius:10,border:`1.5px solid ${qInst===n?C.lavender:C.border}`,background:qInst===n?C.lavender:C.white,color:qInst===n?C.white:C.gray2,fontSize:13,fontWeight:qInst===n?700:500,cursor:'pointer'}}>{n===1?'1x':`${n}x`}</button>
-                  ))}
+            {/* Submit */}
+            <button onClick={handleSubmit}
+              style={{
+                width: '100%',
+                padding: '13px',
+                background: C.coral,
+                color: contrastFg(C.coral),
+                border: 'none',
+                borderRadius: 10,
+                fontSize: 14, fontWeight: 500,
+                cursor: 'pointer',
+              }}>
+              {mode === 'expense' ? 'Guardar gasto' : 'Guardar ingreso'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ─ Quién gastó qué ──────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{
+          fontSize: 15, fontWeight: 500, color: C.gray1,
+          marginBottom: 10, letterSpacing: '-0.2px',
+        }}>
+          Quién gastó qué
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {USERS.map(u => {
+            const amt = expByUser[u] || 0;
+            const pct = totExp > 0 ? Math.round((amt / totExp) * 100) : 0;
+            const color = avatarColor(C, u);
+            return (
+              <div key={u} style={{
+                background: C.white,
+                borderRadius: 14,
+                padding: '14px',
+                border: `0.5px solid ${C.border}`,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <Avatar C={C} name={u} size={28} />
+                  <div style={{ fontSize: 13, fontWeight: 500, color: C.gray1 }}>{u}</div>
                 </div>
-                {qInst>1&&qAmount&&<div style={{marginTop:8,fontSize:13,color:C.lavender,fontWeight:600}}>{fmt(parseFloat(qAmount)/qInst)}/mes durante {qInst} meses</div>}
+                <div style={{
+                  fontSize: 22, fontWeight: 500, color: C.gray1,
+                  letterSpacing: '-0.6px', marginBottom: 10, lineHeight: 1,
+                }}>
+                  ${fmtInt(amt)}
+                </div>
+                <div style={{
+                  height: 5, background: C.gray5,
+                  borderRadius: 4, overflow: 'hidden', marginBottom: 6,
+                }}>
+                  <div style={{
+                    width: `${pct}%`, height: '100%',
+                    background: color, transition: 'width 0.3s ease',
+                  }} />
+                </div>
+                <div style={{ fontSize: 11, color: C.gray4, fontWeight: 500 }}>{pct}%</div>
               </div>
-            )}
-          </div>
-        )}
-
-        <div style={{display:'flex',gap:8,marginBottom:16}}>
-          <select style={{...Sx.inp,flex:1}} value={qUser} onChange={e=>setQUser(e.target.value)}>
-            {USERS.map(u=><option key={u}>{u}</option>)}
-          </select>
-          <input type="date" style={{...Sx.inp,flex:2}} value={qDate} onChange={e=>setQDate(e.target.value)}/>
-        </div>
-
-        {qError&&<div style={{textAlign:'center',marginBottom:10,fontSize:13,color:C.coral,fontWeight:600}}>⚠ {qError}</div>}
-        {qSuccess?(
-          <div style={{textAlign:'center',padding:'14px 0',fontSize:16,fontWeight:700,color:C.sage}}>✓ Registrado!</div>
-        ):(
-          <button onClick={submitQuickAdd} style={{width:'100%',padding:'15px',background:qMode==='expense'?C.coral:C.sage,color:C.white,border:'none',borderRadius:16,fontSize:16,fontWeight:800,cursor:'pointer'}}>
-            {qMode==='expense'?'Registrar egreso':'Registrar ingreso'}
-          </button>
-        )}
-      </div>
-
-      {/* Mini summary */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
-        {[{label:'Ingresos',value:totInc,color:C.sage,bg:C.sageL},{label:'Egresos',value:totExp,color:C.coral,bg:C.coralL},{label:'Ahorros',value:totSav,color:C.lavender,bg:C.lavL},{label:'Balance',value:balance,color:balance>=0?C.sage:C.coral,bg:balance>=0?C.sageL:C.coralL}].map(k=>(
-          <div key={k.label} style={{background:k.bg,borderRadius:16,padding:'14px 16px'}}>
-            <div style={{fontSize:11,color:k.color,fontWeight:600,marginBottom:4}}>{k.label}</div>
-            <div style={{fontSize:20,fontWeight:900,color:C.gray1}}>{fmtK(k.value)}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Quick access */}
-      <div style={{display:'flex',gap:10,marginBottom:14}}>
-        <button onClick={()=>setTab('charts')} style={{flex:1,display:'flex',alignItems:'center',gap:10,padding:'12px 14px',background:C.skyL,border:`1px solid ${C.sky}33`,borderRadius:16,cursor:'pointer'}}>
-          <span style={{fontSize:20}}>◉</span>
-          <div style={{textAlign:'left'}}><div style={{fontWeight:700,fontSize:13,color:C.gray1}}>Gráficos</div><div style={{fontSize:11,color:C.gray3}}>Ver tendencias</div></div>
-        </button>
-        <button onClick={()=>setTab('cards')} style={{flex:1,display:'flex',alignItems:'center',gap:10,padding:'12px 14px',background:C.lavL,border:`1px solid ${C.lavender}33`,borderRadius:16,cursor:'pointer'}}>
-          <span style={{fontSize:20}}>💳</span>
-          <div style={{textAlign:'left'}}><div style={{fontWeight:700,fontSize:13,color:C.gray1}}>Tarjetas</div><div style={{fontSize:11,color:C.gray3}}>Cuotas y gastos</div></div>
-        </button>
-      </div>
-
-      {/* Prediction */}
-      {selMonth===today.getMonth()&&selYear===today.getFullYear()&&totExp>0&&dayNow<daysInMonth&&(
-        <div style={{background:C.peachL,borderRadius:16,padding:'14px 16px',marginBottom:14,display:'flex',alignItems:'center',gap:12}}>
-          <div style={{fontSize:22}}>📈</div>
-          <div style={{flex:1}}>
-            <div style={{fontWeight:700,fontSize:13,color:C.gray1}}>Proyección fin de mes</div>
-            <div style={{fontSize:12,color:C.gray3,marginTop:2}}>A este ritmo: <strong style={{color:projected>totBudget?C.coral:C.gray1}}>{fmt(projected)}</strong>{projected>totBudget?' · superaría el presupuesto ⚠':''}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Budget quick */}
-      {totBudget>0&&(
-        <div style={Sx.card}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-            <div style={Sx.ct}>Presupuesto del mes</div>
-            <button onClick={()=>setTab('budget')} style={{fontSize:12,color:C.coral,fontWeight:600,background:'none',border:'none',cursor:'pointer'}}>Ver todo →</button>
-          </div>
-          <div style={{height:8,background:C.gray5,borderRadius:8,overflow:'hidden',marginBottom:8}}>
-            <div style={{width:`${Math.min((totExp/totBudget)*100,100)}%`,height:'100%',background:totExp>totBudget?C.coral:C.sage,borderRadius:8}}/>
-          </div>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.gray3}}>
-            <span>{fmt(totExp)} gastado</span>
-            <span style={{fontWeight:700,color:totExp>totBudget?C.coral:C.gray2}}>{totBudget?Math.round((totExp/totBudget)*100):0}%</span>
-            <span>de {fmt(totBudget)}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Annual chart */}
-      <div style={Sx.card}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-          <div style={Sx.ct}>Año {selYear}</div>
-          <div style={{display:'flex',gap:6}}>
-            <button onClick={()=>setSelYear(y=>y-1)} style={{padding:'3px 10px',borderRadius:8,border:`1px solid ${C.border}`,background:C.white,cursor:'pointer',fontSize:12,color:C.gray3}}>‹</button>
-            <button onClick={()=>setSelYear(y=>y+1)} style={{padding:'3px 10px',borderRadius:8,border:`1px solid ${C.border}`,background:C.white,cursor:'pointer',fontSize:12,color:C.gray3}}>›</button>
-          </div>
-        </div>
-        <AreaChartSVG data={annualData} height={130}/>
-        <div style={{display:'flex',gap:3,marginTop:10,overflowX:'auto',paddingBottom:2}}>
-          {annualData.map(d=>{
-            const isActive=d.mo===selMonth;
-            const over=d.Egresos>d.Ingresos&&d.Ingresos>0;
-            return(
-              <button key={d.mo} onClick={()=>setSelMonth(d.mo)} style={{flex:1,minWidth:26,padding:'5px 2px',borderRadius:8,border:`2px solid ${isActive?C.coral:'transparent'}`,background:isActive?C.coralL:'transparent',cursor:'pointer'}}>
-                <div style={{fontSize:9,color:isActive?C.coral:C.gray3,fontWeight:isActive?700:400}}>{d.name}</div>
-                <div style={{width:5,height:5,borderRadius:'50%',margin:'3px auto 0',background:!(d.Egresos||d.Ingresos)?C.gray5:over?C.coral:C.sage}}/>
-              </button>
             );
           })}
         </div>
       </div>
 
-      {/* Recent expenses */}
-      <div style={Sx.card}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-          <div style={Sx.ct}>Últimos egresos</div>
-          <button onClick={()=>setTab('expenses')} style={{fontSize:12,color:C.coral,fontWeight:600,background:'none',border:'none',cursor:'pointer'}}>Ver todos →</button>
+      {/* ─ Movimientos recientes ────────────────────────────────────────── */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: 10,
+        }}>
+          <div style={{
+            fontSize: 15, fontWeight: 500, color: C.gray1,
+            letterSpacing: '-0.2px',
+          }}>
+            Movimientos recientes
+          </div>
+          <button onClick={() => setTab('movements')}
+            style={{
+              background: 'none', border: 'none',
+              color: C.coral, fontSize: 13, fontWeight: 500,
+              cursor: 'pointer', padding: 0,
+            }}>
+            Ver todos ›
+          </button>
         </div>
-        {[...filtExp].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4).map(e=>{
-          const cat=getCat(e.category);
-          const isCardPay=!['Efectivo','Débito'].includes(e.paymentMethod||'Efectivo');
-          return(
-            <div key={e.id} style={Sx.txrow}>
-              <div style={{...Sx.dot,background:cat.bg,fontSize:17}}>{cat.icon}</div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:600,fontSize:14,color:C.gray1}}>{e.description}</div>
-                <div style={{display:'flex',gap:5,alignItems:'center',marginTop:2,flexWrap:'wrap'}}>
-                  <span style={{fontSize:11,color:C.gray2}}>{e.user==='Ana'?'👩':'👨'} {e.user}</span>
-                  {isCardPay?<span style={{fontSize:10,background:C.lavL,color:C.lavender,padding:'1px 7px',borderRadius:6,fontWeight:600}}>💳 {e.paymentMethod}{(e.installments||1)>1?` ${e.installments}x`:''}</span>
-                    :<span style={{fontSize:10,background:C.sageL,color:C.sage,padding:'1px 7px',borderRadius:6,fontWeight:600}}>{e.paymentMethod||'Efectivo'}</span>}
+
+        {recents.length === 0 ? (
+          <div style={{ background: C.white, borderRadius: 14, border: `0.5px solid ${C.border}`, textAlign: 'center', padding: '28px 16px', color: C.gray3, fontSize: 14 }}>
+            Todavía no registraron movimientos este mes
+          </div>
+        ) : recents.map((m) => {
+          const key = m._type === 'expense' ? `e-${m.id}` : `i-${m.id}`;
+          const isExp = m._type === 'expense';
+          const cat = isExp ? getCat(m.category) : null;
+          const isHL = m.id === highlightId;
+          const label = m.description || (isExp ? m.category : (m.incomeCategory || 'Ingreso'));
+          const userColor = avatarColor(C, m.user);
+          const isEditing = editingRecent === key;
+
+          return (
+            <div key={key} style={{ marginBottom: 6 }}>
+              {/* Row */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '12px 14px',
+                background: isHL ? C.coralL : C.white,
+                borderRadius: isEditing ? '12px 12px 0 0' : 12,
+                border: `0.5px solid ${isEditing ? C.coral : C.border}`,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+                transition: 'background 0.4s ease',
+              }}>
+                <div style={{
+                  width: 36, height: 36, borderRadius: '50%',
+                  background: isExp ? C.peachL : C.coralL,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16, flexShrink: 0,
+                }}>
+                  {isExp ? (cat?.icon || '🛒') : '💰'}
                 </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 14, fontWeight: 500, color: C.gray1,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{label}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                    <div style={{
+                      width: 14, height: 14, borderRadius: '50%',
+                      background: userColor, color: contrastFg(userColor),
+                      fontSize: 8, fontWeight: 500,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>{m.user?.[0] || '?'}</div>
+                    <div style={{ fontSize: 11, color: C.gray3 }}>
+                      {m.user}
+                      {isExp && m.date ? ` · ${formatRelative(m.date)}` : ''}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: isExp ? C.rose : C.sage, flexShrink: 0 }}>
+                  {isExp ? '-' : '+'}${fmtInt(m.amount)}
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); openRecentEdit(m); }}
+                  style={{ background: isEditing ? C.coralL : C.gray6, border: `0.5px solid ${isEditing ? C.coral : C.border}`, borderRadius: 7, cursor: 'pointer', color: isEditing ? C.coral : C.gray3, fontSize: 13, padding: '5px 8px', flexShrink: 0, lineHeight: 1 }}
+                >✏</button>
               </div>
-              <div style={{fontWeight:800,fontSize:15,color:C.gray1}}>{fmt(e.amount)}</div>
+
+              {/* Inline editor */}
+              {isEditing && editRecentForm && (
+                <div style={{
+                  background: C.white,
+                  borderRadius: '0 0 12px 12px',
+                  padding: '14px 16px',
+                  border: `0.5px solid ${C.coral}`,
+                  borderTop: `0.5px solid ${C.border}`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Editar {isExp ? 'gasto' : 'ingreso'}</div>
+                    <button onClick={closeRecentEdit} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.gray3, fontSize: 18, lineHeight: 1 }}>✕</button>
+                  </div>
+
+                  {/* Monto */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Monto</div>
+                    <input type="text" inputMode="numeric"
+                      value={editRecentForm.amount}
+                      onChange={e => setEditRecentForm(f => ({ ...f, amount: parseInt(e.target.value.replace(/\D/g, ''), 10) || 0 }))}
+                      style={{ ...Sx.inp }} />
+                  </div>
+
+                  {/* Descripción */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Descripción</div>
+                    <input type="text"
+                      value={editRecentForm.description || ''}
+                      onChange={e => setEditRecentForm(f => ({ ...f, description: e.target.value }))}
+                      style={{ ...Sx.inp }} />
+                  </div>
+
+                  {/* Categoría */}
+                  {isExp ? (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Categoría</div>
+                      <select value={editRecentForm.category}
+                        onChange={e => setEditRecentForm(f => ({ ...f, category: e.target.value }))}
+                        style={{ ...Sx.inp, cursor: 'pointer' }}>
+                        {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Origen</div>
+                      <select value={editRecentForm.incomeCategory || ''}
+                        onChange={e => setEditRecentForm(f => ({ ...f, incomeCategory: e.target.value }))}
+                        style={{ ...Sx.inp, cursor: 'pointer' }}>
+                        {incomeCategories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Fecha */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Fecha</div>
+                    <input
+                      type="date"
+                      value={isExp
+                        ? (editRecentForm.date || '')
+                        : `${editRecentForm.year ?? new Date().getFullYear()}-${String((editRecentForm.month ?? new Date().getMonth()) + 1).padStart(2, '0')}-01`
+                      }
+                      onChange={e => {
+                        const d = new Date(e.target.value + 'T00:00:00');
+                        if (isExp) {
+                          setEditRecentForm(f => ({ ...f, date: e.target.value }));
+                        } else {
+                          setEditRecentForm(f => ({ ...f, date: e.target.value, month: d.getMonth(), year: d.getFullYear() }));
+                        }
+                      }}
+                      style={{ ...Sx.inp }}
+                    />
+                  </div>
+
+                  <button onClick={saveRecentEdit}
+                    style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: C.coral, color: '#fff', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+                    Guardar
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
-        {!filtExp.length&&<div style={{textAlign:'center',padding:'20px 0',color:C.gray3,fontSize:14}}>Sin egresos este mes</div>}
       </div>
 
-      {/* Note */}
-      <div style={Sx.card}>
-        <div style={Sx.ct}>📝 Nota del mes</div>
-        <textarea value={notes[noteKey]||''} onChange={e=>updateNote(e.target.value)} onBlur={saveNote}
-          placeholder="Contexto de este mes..." style={{...Sx.inp,minHeight:64,resize:'vertical',lineHeight:1.5}}/>
-      </div>
+      {/* ─ Pie chart de categorías (al final) ──────────────────────────────── */}
+      {filtExp.length > 0 && (() => {
+        const pieChartData = filtExp.map(e => {
+          const cat = getCat(e.category);
+          return { ...cat, value: e.amount };
+        }).reduce((acc, item) => {
+          const existing = acc.find(x => x.name === item.name);
+          if (existing) {
+            existing.value += item.value;
+          } else {
+            acc.push(item);
+          }
+          return acc;
+        }, []).filter(c => c.value > 0).sort((a, b) => b.value - a.value);
+
+        return (
+          <div style={{
+            background: C.white,
+            borderRadius: 14,
+            padding: '16px 14px',
+            marginTop: 20,
+            marginBottom: 8,
+            border: `0.5px solid ${C.border}`,
+            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: C.gray1, marginBottom: 12, letterSpacing: '-0.2px' }}>
+              Gastos por categoría
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+              <PieChartSVG data={pieChartData} size={140} />
+            </div>
+            <div style={{ marginTop: 12 }}>
+              {pieChartData.map(d => (
+                <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0' }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flexShrink: 0 }} />
+                  <div style={{ flex: 1, fontSize: 13, color: C.gray2 }}>{d.icon} {d.name}</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: C.gray1, minWidth: 60, textAlign: 'right' }}>{fmt(d.value)}</div>
+                  <div style={{ fontSize: 12, color: C.gray3, minWidth: 36, textAlign: 'right' }}>{totExp ? Math.round((d.value / totExp) * 100) : 0}%</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: C.gray3, textAlign: 'center', paddingTop: 8, borderTop: `0.5px solid ${C.gray5}`, marginTop: 8 }}>
+              {MONTHS_FULL[selMonth]} · {filtExp.length} {filtExp.length === 1 ? 'gasto' : 'gastos'}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
+}
+
+// Format relative date for movement rows
+function formatRelative(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const now = new Date();
+  const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.round((today0 - d) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return 'hoy';
+  if (diffDays === 1) return 'ayer';
+  if (diffDays > 1 && diffDays < 7) return `hace ${diffDays} días`;
+  return d.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' });
 }

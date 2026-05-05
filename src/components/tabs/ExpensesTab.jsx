@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { C, Sx, USERS } from '../../utils/constants';
+import { USERS } from '../../utils/constants';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function ExpensesTab({ filtExp, totExp, expByUser, getCat, fmt, delExp, setTab }) {
+  const { C, Sx } = useTheme();
   const [expFilter, setExpFilter] = useState('Todos');
 
   return (
@@ -30,7 +32,7 @@ export default function ExpensesTab({ filtExp, totExp, expByUser, getCat, fmt, d
               <span style={{ fontSize: 20 }}>{u === 'Ana' ? '👩' : '👨'}</span>
               <div>
                 <div style={{ fontSize: 11, color: C.gray3, fontWeight: 600 }}>{u}</div>
-                <div style={{ fontSize: 17, fontWeight: 900, color: C.coral }}>{fmt(expByUser[u] || 0)}</div>
+                <div style={{ fontSize: 17, fontWeight: 500, color: C.rose }}>{fmt(expByUser[u] || 0)}</div>
               </div>
             </div>
           </div>
@@ -61,7 +63,7 @@ export default function ExpensesTab({ filtExp, totExp, expByUser, getCat, fmt, d
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                <div style={{ fontWeight: 800, fontSize: 16, color: C.gray1 }}>{fmt(e.amount)}</div>
+                <div style={{ fontWeight: 500, fontSize: 16, color: C.rose }}>{fmt(e.amount)}</div>
                 {hasCuotas && <div style={{ fontSize: 11, color: C.lavender }}>{fmt(e.amount / e.installments)}/mes</div>}
                 <button onClick={() => delExp(e.id)} style={Sx.xbtn}>×</button>
               </div>

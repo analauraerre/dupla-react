@@ -26,3 +26,4 @@ dist-ssr
 # Env files (contain secrets)
 .env
 .env.local
+.vercel

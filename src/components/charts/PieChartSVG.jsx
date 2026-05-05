@@ -1,4 +1,4 @@
-export default function PieChartSVG({ data, size = 200 }) {
+export default function PieChartSVG({ data, size = 200, strokeColor = '#ffffff' }) {
   if (!data || !data.length) return null;
   const total = data.reduce((s, d) => s + d.value, 0);
   if (!total) return null;
@@ -16,7 +16,7 @@ export default function PieChartSVG({ data, size = 200 }) {
   });
   return (
     <svg width={size} height={size} style={{ display: 'block', margin: '0 auto' }}>
-      {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} stroke="white" strokeWidth={2} />)}
+      {slices.map((s, i) => <path key={i} d={s.path} fill={s.color} stroke={strokeColor} strokeWidth={2} />)}
     </svg>
   );
 }

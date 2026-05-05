@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { C, Sx, MONTHS, MONTHS_FULL, PALETTE, ICON_OPTIONS } from '../../utils/constants';
+import { MONTHS, MONTHS_FULL, PALETTE, ICON_OPTIONS } from '../../utils/constants';
+import { useTheme } from '../../context/ThemeContext';
 import PieChartSVG from '../charts/PieChartSVG';
 import BarChartSVG from '../charts/BarChartSVG';
 import LineChartSVG from '../charts/LineChartSVG';
@@ -9,6 +10,7 @@ export default function ChartsTab({
   filtExp, totExp, effBudgets, expByCat, pieData, barData,
   fmt, addCategory, deleteCategory,
 }) {
+  const { C, Sx } = useTheme();
   const [chartView,    setChartView]    = useState('pie');
   const [showCatMgr,  setShowCatMgr]   = useState(false);
   const [newCat,       setNewCat]       = useState({ name: '', icon: '⭐', color: C.sage, bg: C.sageL });
@@ -27,9 +29,18 @@ export default function ChartsTab({
 
   return (
     <div>
-      <div style={Sx.ph}>
-        <div><div style={Sx.pt}>Gráficos</div><div style={Sx.ps}>{MONTHS_FULL[selMonth]}</div></div>
-        <button style={{ ...Sx.btn, background: C.gray6, color: C.gray2, border: `1px solid ${C.border}` }} onClick={() => setShowCatMgr(v => !v)}>{showCatMgr ? '✕ Cerrar' : '⚙ Categorías'}</button>
+      {/* Header verde */}
+      <div style={{ background: C.coral, borderRadius: 14, padding: '18px 16px 20px', marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: 4 }}>Gráficos</div>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>{MONTHS_FULL[selMonth]} {selYear}</div>
+          </div>
+          <button
+            onClick={() => setShowCatMgr(v => !v)}
+            style={{ padding: '7px 12px', borderRadius: 8, border: '0.5px solid rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
+          >{showCatMgr ? '✕ Cerrar' : '⚙ Categorías'}</button>
+        </div>
       </div>
 
       {showCatMgr && (

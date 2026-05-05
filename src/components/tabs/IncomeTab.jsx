@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { C, Sx, USERS, MONTHS_FULL } from '../../utils/constants';
+import { USERS, MONTHS_FULL } from '../../utils/constants';
+import { useTheme } from '../../context/ThemeContext';
 
 export default function IncomeTab({ selMonth, incomeCategories, filtInc, totInc, fmt, addIncome, delInc }) {
+  const { C, Sx } = useTheme();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm]         = useState({ description: '', amount: '', user: 'Ana', incomeCategory: incomeCategories[0]?.name || '' });
 
