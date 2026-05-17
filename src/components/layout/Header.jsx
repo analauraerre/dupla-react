@@ -1,20 +1,26 @@
 import { useState } from 'react';
 import { MONTHS_FULL } from '../../utils/constants';
 import { today } from '../../utils/formatters';
-import { useTheme } from '../../context/ThemeContext';
+import { useTheme } from '../../hooks/useTheme';
 import { DuplaLogo } from '../DuplaLogo';
+import { FloatingLayer } from '../../motion/index.js';
 
 export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syncing, lastSync, userInfo, onLogout, setTab }) {
   const { C } = useTheme();
   const [showPanel, setShowPanel] = useState(false);
 
   return (
-    <div style={{
-      background: C.white,
-      borderBottom: `0.5px solid ${C.border}`,
-      padding: '12px 18px',
-      position: 'sticky', top: 0, zIndex: 20,
-    }}>
+    <header
+      data-ui="app-bar"
+      data-component="header"
+      data-surface="raised"
+      style={{
+        background: C.white,
+        borderBottom: `0.5px solid ${C.border}`,
+        padding: '12px 18px',
+        position: 'sticky', top: 0, zIndex: 20,
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
 
         {/* Logo — clickeable */}
@@ -27,6 +33,7 @@ export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syn
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
           <button
             onClick={() => { if (selMonth === 0) { setSelMonth(11); setSelYear(y => y - 1); } else setSelMonth(m => m - 1); }}
+            aria-label="Mes anterior"
             style={{ width: 30, height: 30, borderRadius: '50%', border: `0.5px solid ${C.border}`, background: C.gray6, cursor: 'pointer', fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.gray2 }}
           >‹</button>
 
@@ -36,12 +43,14 @@ export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syn
 
           <button
             onClick={() => { if (selMonth === 11) { setSelMonth(0); setSelYear(y => y + 1); } else setSelMonth(m => m + 1); }}
+            aria-label="Mes siguiente"
             style={{ width: 30, height: 30, borderRadius: '50%', border: `0.5px solid ${C.border}`, background: C.gray6, cursor: 'pointer', fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.gray2 }}
           >›</button>
 
           {(selMonth !== today.getMonth() || selYear !== today.getFullYear()) && (
             <button
               onClick={() => { setSelMonth(today.getMonth()); setSelYear(today.getFullYear()); }}
+              aria-label="Volver al mes actual"
               style={{ padding: '4px 10px', borderRadius: 8, border: `0.5px solid ${C.coral}`, background: C.coralL, color: C.coral, fontSize: 11, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >Hoy</button>
           )}
@@ -51,21 +60,46 @@ export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syn
         <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
           {/* Sync indicator */}
           {syncing ? (
-            <div style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${C.gray5}`, borderTopColor: C.coral, animation: 'dupla-spin 0.7s linear infinite' }} />
+            <div
+              data-ui="status-indicator"
+              data-component="sync-indicator"
+              data-state="syncing"
+              aria-label="Sincronizando"
+              style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${C.gray5}`, borderTopColor: C.coral, animation: 'dupla-spin 0.7s linear infinite' }}
+            />
           ) : (
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: lastSync ? C.sage : C.gray4, transition: 'background 0.3s' }} title={lastSync ? 'Sincronizado' : 'Sin datos'} />
+            <div
+              data-ui="status-indicator"
+              data-component="sync-indicator"
+              data-state={lastSync ? 'synced' : 'idle'}
+              title={lastSync ? 'Sincronizado' : 'Sin datos'}
+              style={{ width: 7, height: 7, borderRadius: '50%', background: lastSync ? C.sage : C.gray4, transition: 'background 0.3s' }}
+            />
           )}
 
           {/* Avatar — abre panel */}
           {userInfo?.picture ? (
-            <img
-              src={userInfo.picture} alt="avatar"
+            <button
               onClick={() => setShowPanel(v => !v)}
-              style={{ width: 30, height: 30, borderRadius: '50%', cursor: 'pointer', border: `0.5px solid ${C.border}` }}
-            />
+              aria-label="Abrir menú de usuario"
+              aria-expanded={showPanel}
+              data-ui="avatar-button"
+              data-component="user-menu-trigger"
+              data-state={showPanel ? 'open' : 'closed'}
+              data-testid="user-menu"
+              style={{ width: 30, height: 30, borderRadius: '50%', cursor: 'pointer', border: `0.5px solid ${C.border}`, background: 'none', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}
+            >
+              <img src={userInfo.picture} alt="" aria-hidden="true" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+            </button>
           ) : (
             <button
               onClick={() => setShowPanel(v => !v)}
+              aria-label="Abrir menú de usuario"
+              aria-expanded={showPanel}
+              data-ui="avatar-button"
+              data-component="user-menu-trigger"
+              data-state={showPanel ? 'open' : 'closed'}
+              data-testid="user-menu"
               style={{ width: 30, height: 30, borderRadius: '50%', border: `0.5px solid ${C.border}`, background: C.gray6, cursor: 'pointer', fontSize: 13, color: C.gray3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >👤</button>
           )}
@@ -74,18 +108,24 @@ export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syn
           {showPanel && (
             <>
               {/* Backdrop */}
-              <div onClick={() => setShowPanel(false)} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
+              <div onClick={() => setShowPanel(false)} aria-hidden="true" style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
 
               {/* Dropdown */}
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                background: C.white, borderRadius: 12,
-                border: `0.5px solid ${C.border}`,
-                boxShadow: '0 4px 20px rgba(0,0,0,0.10)',
-                padding: '14px', zIndex: 31,
-                minWidth: 220,
-                animation: 'dp-expand-in 0.18s cubic-bezier(0.16,1,0.3,1) forwards',
-              }}>
+              <FloatingLayer
+                data-ui="dropdown"
+                data-component="user-dropdown"
+                data-state="open"
+                role="dialog"
+                aria-label="Menú de usuario"
+                style={{
+                  position: 'absolute', top: 'calc(100% + 10px)', right: 0,
+                  background: C.white, borderRadius: 12,
+                  border: `0.5px solid ${C.border}`,
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.10)',
+                  padding: '14px', zIndex: 31,
+                  minWidth: 220,
+                }}
+              >
                 {/* Info usuario */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, paddingBottom: 14, borderBottom: `0.5px solid ${C.border}` }}>
                   {userInfo?.picture ? (
@@ -119,11 +159,11 @@ export default function Header({ selMonth, selYear, setSelMonth, setSelYear, syn
                   <span style={{ fontSize: 15 }}>↩</span>
                   <span style={{ fontSize: 13, fontWeight: 500, color: C.rose }}>Cerrar sesión</span>
                 </button>
-              </div>
+              </FloatingLayer>
             </>
           )}
         </div>
       </div>
-    </div>
+    </header>
   );
 }

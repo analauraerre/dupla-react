@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { USERS, MONTHS_FULL } from '../../utils/constants';
-import { useTheme, contrastFg } from '../../context/ThemeContext';
+import { useTheme, contrastFg } from '../../hooks/useTheme';
 import { todayStr } from '../../utils/formatters';
 import PieChartSVG from '../charts/PieChartSVG';
+import { ExpandContainer, MotionPressable, FloatingLayer } from '../../motion/index.js';
+import { ACCORDION_CLEAR_DELAY } from '../../motion/motionPolicy.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 // Avatar color por posición en USERS — extensible a más usuarios después
@@ -27,13 +29,16 @@ function Avatar({ C, name, size = 28 }) {
 }
 
 // Label small caps reutilizable
-const Label = ({ C, children }) => (
-  <div style={{
+const Label = ({ C, children, htmlFor }) => {
+  const style = {
     fontSize: 11, color: C.gray4, fontWeight: 500,
     textTransform: 'uppercase', letterSpacing: '1.5px',
-    marginBottom: 6,
-  }}>{children}</div>
-);
+    marginBottom: 6, display: 'block',
+  };
+  return htmlFor
+    ? <label htmlFor={htmlFor} style={style}>{children}</label>
+    : <div style={style}>{children}</div>;
+};
 
 // Format integer with es-AR thousand separators
 const fmtInt = n => Math.round(n).toLocaleString('es-AR');
@@ -63,14 +68,36 @@ export default function HomeTab({
   // ── Edit recent state ────────────────────────────────────────────────────
   const [editingRecent, setEditingRecent] = useState(null); // `e-${id}` | `i-${id}` | null
   const [editRecentForm, setEditRecentForm] = useState(null);
+  const [closingRecentKey, setClosingRecentKey] = useState(null);
+  const recentCloseTimerRef = useRef(null);
 
   const openRecentEdit = (m) => {
     const key = m._type === 'expense' ? `e-${m.id}` : `i-${m.id}`;
-    if (editingRecent === key) { setEditingRecent(null); setEditRecentForm(null); return; }
+    clearTimeout(recentCloseTimerRef.current);
+    if (editingRecent === key) {
+      setClosingRecentKey(key);
+      setEditingRecent(null);
+      recentCloseTimerRef.current = setTimeout(() => {
+        setEditRecentForm(null);
+        setClosingRecentKey(null);
+      }, ACCORDION_CLEAR_DELAY);
+      return;
+    }
+    setClosingRecentKey(null);
     setEditingRecent(key);
     setEditRecentForm({ ...m });
   };
-  const closeRecentEdit = () => { setEditingRecent(null); setEditRecentForm(null); };
+
+  const closeRecentEdit = () => {
+    clearTimeout(recentCloseTimerRef.current);
+    setClosingRecentKey(editingRecent);
+    setEditingRecent(null);
+    recentCloseTimerRef.current = setTimeout(() => {
+      setEditRecentForm(null);
+      setClosingRecentKey(null);
+    }, ACCORDION_CLEAR_DELAY);
+  };
+
   const saveRecentEdit = () => {
     if (!editRecentForm) return;
     if (editRecentForm._type === 'expense') editExpense(editRecentForm.id, editRecentForm);
@@ -87,6 +114,7 @@ export default function HomeTab({
   useEffect(() => () => {
     clearTimeout(toastTimerRef.current);
     clearTimeout(highlightTimerRef.current);
+    clearTimeout(recentCloseTimerRef.current);
   }, []);
 
   const amountNum = parseInt(amount || '0', 10);
@@ -162,12 +190,6 @@ export default function HomeTab({
     ...filtInc.map(i => ({ ...i, _type: 'income',  _ts: i.id })),
   ].sort((a, b) => b._ts - a._ts).slice(0, 5);
 
-  // ── Animación para campos expandidos (grupo único) ───────────────────────
-  const expandAnim = {
-    animation: 'dp-expand-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-    opacity: 0,
-  };
-
   // ── Render ───────────────────────────────────────────────────────────────
   const greeting = `Hola, ${USERS.join(' & ')}`;
 
@@ -176,10 +198,19 @@ export default function HomeTab({
 
       {/* ─ Toast (fixed top) ─────────────────────────────────────────────── */}
       {toast && (
-        <div style={{
-          position: 'fixed', top: 18, left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 200,
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-ui="toast"
+          data-component="feedback-toast"
+          data-variant="success"
+          data-surface="floating"
+          data-motion="slide-in"
+          style={{
+            position: 'fixed', top: 18, left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 200,
           background: C.white,
           border: `0.5px solid ${C.border}`,
           borderLeft: `3px solid ${C.sage}`,
@@ -206,13 +237,19 @@ export default function HomeTab({
       )}
 
       {/* ─ Welcome banner verde ──────────────────────────────────────────── */}
-      <div style={{
-        background: C.coral,
-        color: '#fff',
-        borderRadius: 14,
-        padding: '20px 18px 28px',
-        marginBottom: 0,
-      }}>
+      <section
+        data-ui="hero"
+        data-component="home-hero"
+        data-surface="base"
+        data-motion="entrance"
+        style={{
+          background: C.coral,
+          color: '#fff',
+          borderRadius: 14,
+          padding: '20px 18px 28px',
+          marginBottom: 0,
+        }}
+      >
         <div style={{ fontSize: 14, fontWeight: 500, color: 'rgba(255,255,255,0.92)', letterSpacing: '-0.2px' }}>
           {greeting}
         </div>
@@ -235,19 +272,25 @@ export default function HomeTab({
             {deltaPct > 0 ? '↑' : '↓'} {Math.abs(deltaPct)}% vs {prevMonthName}
           </div>
         )}
-      </div>
+      </section>
 
       {/* ─ Floating white card with form ────────────────────────────────── */}
-      <div style={{
-        background: C.white,
-        borderRadius: 14,
-        padding: '18px',
-        marginTop: -16,
-        marginBottom: 20,
-        border: `0.5px solid ${C.border}`,
-        boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
-        position: 'relative', zIndex: 1,
-      }}>
+      <div
+        data-ui="card"
+        data-component="entry-card"
+        data-state={isExpanded ? 'expanded' : 'collapsed'}
+        data-motion="expand"
+        style={{
+          background: C.white,
+          borderRadius: 14,
+          padding: '18px',
+          marginTop: -16,
+          marginBottom: 20,
+          border: `0.5px solid ${C.border}`,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+          position: 'relative', zIndex: 1,
+        }}
+      >
 
         {/* Toggle Egreso/Ingreso */}
         <div style={{
@@ -279,7 +322,7 @@ export default function HomeTab({
 
         {/* Amount hero */}
         <div style={{ textAlign: 'center', marginBottom: isExpanded ? 22 : 14 }}>
-          <Label C={C}>{isExpanded ? 'Monto' : '¿Cuánto gastaste?'}</Label>
+          <Label C={C} htmlFor="home-amount">{isExpanded ? 'Monto' : '¿Cuánto gastaste?'}</Label>
           <div style={{
             display: 'inline-flex', alignItems: 'baseline',
             borderBottom: `2px solid ${mode === 'expense' ? C.rose : C.sage}`,
@@ -289,11 +332,15 @@ export default function HomeTab({
           }}>
             <span style={{ fontSize: 28, color: C.gray4, marginRight: 6, fontWeight: 400 }}>$</span>
             <input
+              id="home-amount"
               type="text"
               inputMode="numeric"
               value={amount ? fmtInt(amountNum) : ''}
               onChange={onAmountChange}
               placeholder="0"
+              data-ui="amount-input"
+              data-component="amount-hero"
+              data-testid="amount-input"
               style={{
                 border: 'none', outline: 'none', background: 'transparent',
                 fontSize: 36, fontWeight: 500, color: C.gray1,
@@ -311,13 +358,14 @@ export default function HomeTab({
         </div>
 
         {/* Expanded fields */}
-        {isExpanded && (
-          <div style={expandAnim}>
+        <ExpandContainer expanded={isExpanded}>
+          <div>
 
             {/* Descripción */}
             <div style={{ marginBottom: 16 }}>
-              <Label C={C}>Descripción</Label>
+              <Label C={C} htmlFor="home-description">Descripción</Label>
               <input
+                id="home-description"
                 value={description} onChange={e => setDescription(e.target.value)}
                 placeholder="Ej: compra del finde"
                 style={{ ...Sx.inp }}
@@ -414,15 +462,15 @@ export default function HomeTab({
                     <>
                       <div
                         onClick={() => setPaidByOpen(false)}
+                        aria-hidden="true"
                         style={{ position: 'fixed', inset: 0, zIndex: 40 }}
                       />
-                      <div style={{
+                      <FloatingLayer style={{
                         position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
                         background: C.white, borderRadius: 10,
                         border: `0.5px solid ${C.border}`,
                         boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
                         padding: 4, zIndex: 41,
-                        animation: 'dupla-rise 0.18s ease forwards',
                       }}>
                         {USERS.map(u => (
                           <button key={u}
@@ -439,7 +487,7 @@ export default function HomeTab({
                             {u}
                           </button>
                         ))}
-                      </div>
+                      </FloatingLayer>
                     </>
                   )}
                 </div>
@@ -477,7 +525,14 @@ export default function HomeTab({
             </div>
 
             {/* Submit */}
-            <button onClick={handleSubmit}
+            <MotionPressable
+              as="button"
+              onClick={handleSubmit}
+              scaleVariant="press"
+              data-ui="cta"
+              data-component="submit-entry"
+              data-variant={mode}
+              data-testid="submit-expense"
               style={{
                 width: '100%',
                 padding: '13px',
@@ -487,11 +542,12 @@ export default function HomeTab({
                 borderRadius: 10,
                 fontSize: 14, fontWeight: 500,
                 cursor: 'pointer',
-              }}>
+              }}
+            >
               {mode === 'expense' ? 'Guardar gasto' : 'Guardar ingreso'}
-            </button>
+            </MotionPressable>
           </div>
-        )}
+        </ExpandContainer>
       </div>
 
       {/* ─ Quién gastó qué ──────────────────────────────────────────────── */}
@@ -502,13 +558,13 @@ export default function HomeTab({
         }}>
           Quién gastó qué
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div data-ui="grid" data-component="user-expense-grid" data-layout="grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {USERS.map(u => {
             const amt = expByUser[u] || 0;
             const pct = totExp > 0 ? Math.round((amt / totExp) * 100) : 0;
             const color = avatarColor(C, u);
             return (
-              <div key={u} style={{
+              <div key={u} data-ui="stat-card" data-component="user-expense-card" data-variant={`user-${u.toLowerCase()}`} style={{
                 background: C.white,
                 borderRadius: 14,
                 padding: '14px',
@@ -553,12 +609,15 @@ export default function HomeTab({
           }}>
             Movimientos recientes
           </div>
-          <button onClick={() => setTab('movements')}
+          <button
+            onClick={() => setTab('movements')}
+            aria-label="Ver todos los movimientos"
             style={{
               background: 'none', border: 'none',
               color: C.coral, fontSize: 13, fontWeight: 500,
               cursor: 'pointer', padding: 0,
-            }}>
+            }}
+          >
             Ver todos ›
           </button>
         </div>
@@ -567,7 +626,9 @@ export default function HomeTab({
           <div style={{ background: C.white, borderRadius: 14, border: `0.5px solid ${C.border}`, textAlign: 'center', padding: '28px 16px', color: C.gray3, fontSize: 14 }}>
             Todavía no registraron movimientos este mes
           </div>
-        ) : recents.map((m) => {
+        ) : (
+          <ul data-ui="list" data-component="recent-movements" style={{ listStyle: 'none', padding: 0 }}>
+          {recents.map((m) => {
           const key = m._type === 'expense' ? `e-${m.id}` : `i-${m.id}`;
           const isExp = m._type === 'expense';
           const cat = isExp ? getCat(m.category) : null;
@@ -577,7 +638,15 @@ export default function HomeTab({
           const isEditing = editingRecent === key;
 
           return (
-            <div key={key} style={{ marginBottom: 6 }}>
+            <li
+              key={key}
+              data-ui="list-item"
+              data-component="movement-row"
+              data-variant={isExp ? 'expense' : 'income'}
+              data-state={isEditing ? 'editing' : isHL ? 'highlighted' : 'default'}
+              data-motion="accordion"
+              style={{ marginBottom: 6 }}
+            >
               {/* Row */}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 12,
@@ -620,93 +689,99 @@ export default function HomeTab({
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); openRecentEdit(m); }}
+                  aria-label={`Editar ${isExp ? 'gasto' : 'ingreso'}: ${label}`}
+                  aria-expanded={isEditing}
                   style={{ background: isEditing ? C.coralL : C.gray6, border: `0.5px solid ${isEditing ? C.coral : C.border}`, borderRadius: 7, cursor: 'pointer', color: isEditing ? C.coral : C.gray3, fontSize: 13, padding: '5px 8px', flexShrink: 0, lineHeight: 1 }}
                 >✏</button>
               </div>
 
               {/* Inline editor */}
-              {isEditing && editRecentForm && (
-                <div style={{
-                  background: C.white,
-                  borderRadius: '0 0 12px 12px',
-                  padding: '14px 16px',
-                  border: `0.5px solid ${C.coral}`,
-                  borderTop: `0.5px solid ${C.border}`,
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Editar {isExp ? 'gasto' : 'ingreso'}</div>
-                    <button onClick={closeRecentEdit} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.gray3, fontSize: 18, lineHeight: 1 }}>✕</button>
-                  </div>
-
-                  {/* Monto */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Monto</div>
-                    <input type="text" inputMode="numeric"
-                      value={editRecentForm.amount}
-                      onChange={e => setEditRecentForm(f => ({ ...f, amount: parseInt(e.target.value.replace(/\D/g, ''), 10) || 0 }))}
-                      style={{ ...Sx.inp }} />
-                  </div>
-
-                  {/* Descripción */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Descripción</div>
-                    <input type="text"
-                      value={editRecentForm.description || ''}
-                      onChange={e => setEditRecentForm(f => ({ ...f, description: e.target.value }))}
-                      style={{ ...Sx.inp }} />
-                  </div>
-
-                  {/* Categoría */}
-                  {isExp ? (
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Categoría</div>
-                      <select value={editRecentForm.category}
-                        onChange={e => setEditRecentForm(f => ({ ...f, category: e.target.value }))}
-                        style={{ ...Sx.inp, cursor: 'pointer' }}>
-                        {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                      </select>
+              <ExpandContainer expanded={isEditing}>
+                {(isEditing || closingRecentKey === key) && editRecentForm && (
+                  <div style={{
+                    background: C.white,
+                    borderRadius: '0 0 12px 12px',
+                    padding: '14px 16px',
+                    border: `0.5px solid ${C.coral}`,
+                    borderTop: `0.5px solid ${C.border}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Editar {isExp ? 'gasto' : 'ingreso'}</div>
+                      <button onClick={closeRecentEdit} aria-label="Cerrar editor" style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.gray3, fontSize: 18, lineHeight: 1 }}>✕</button>
                     </div>
-                  ) : (
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Origen</div>
-                      <select value={editRecentForm.incomeCategory || ''}
-                        onChange={e => setEditRecentForm(f => ({ ...f, incomeCategory: e.target.value }))}
-                        style={{ ...Sx.inp, cursor: 'pointer' }}>
-                        {incomeCategories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
-                      </select>
-                    </div>
-                  )}
 
-                  {/* Fecha */}
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Fecha</div>
-                    <input
-                      type="date"
-                      value={isExp
-                        ? (editRecentForm.date || '')
-                        : `${editRecentForm.year ?? new Date().getFullYear()}-${String((editRecentForm.month ?? new Date().getMonth()) + 1).padStart(2, '0')}-01`
-                      }
-                      onChange={e => {
-                        const d = new Date(e.target.value + 'T00:00:00');
-                        if (isExp) {
-                          setEditRecentForm(f => ({ ...f, date: e.target.value }));
-                        } else {
-                          setEditRecentForm(f => ({ ...f, date: e.target.value, month: d.getMonth(), year: d.getFullYear() }));
+                    {/* Monto */}
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Monto</div>
+                      <input type="text" inputMode="numeric"
+                        value={editRecentForm.amount}
+                        onChange={e => setEditRecentForm(f => ({ ...f, amount: parseInt(e.target.value.replace(/\D/g, ''), 10) || 0 }))}
+                        style={{ ...Sx.inp }} />
+                    </div>
+
+                    {/* Descripción */}
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Descripción</div>
+                      <input type="text"
+                        value={editRecentForm.description || ''}
+                        onChange={e => setEditRecentForm(f => ({ ...f, description: e.target.value }))}
+                        style={{ ...Sx.inp }} />
+                    </div>
+
+                    {/* Categoría */}
+                    {isExp ? (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Categoría</div>
+                        <select value={editRecentForm.category}
+                          onChange={e => setEditRecentForm(f => ({ ...f, category: e.target.value }))}
+                          style={{ ...Sx.inp, cursor: 'pointer' }}>
+                          {categories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+                        </select>
+                      </div>
+                    ) : (
+                      <div style={{ marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Origen</div>
+                        <select value={editRecentForm.incomeCategory || ''}
+                          onChange={e => setEditRecentForm(f => ({ ...f, incomeCategory: e.target.value }))}
+                          style={{ ...Sx.inp, cursor: 'pointer' }}>
+                          {incomeCategories.map(c => <option key={c.name} value={c.name}>{c.icon} {c.name}</option>)}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Fecha */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, color: C.gray3, marginBottom: 4, fontWeight: 500 }}>Fecha</div>
+                      <input
+                        type="date"
+                        value={isExp
+                          ? (editRecentForm.date || '')
+                          : `${editRecentForm.year ?? new Date().getFullYear()}-${String((editRecentForm.month ?? new Date().getMonth()) + 1).padStart(2, '0')}-01`
                         }
-                      }}
-                      style={{ ...Sx.inp }}
-                    />
-                  </div>
+                        onChange={e => {
+                          const d = new Date(e.target.value + 'T00:00:00');
+                          if (isExp) {
+                            setEditRecentForm(f => ({ ...f, date: e.target.value }));
+                          } else {
+                            setEditRecentForm(f => ({ ...f, date: e.target.value, month: d.getMonth(), year: d.getFullYear() }));
+                          }
+                        }}
+                        style={{ ...Sx.inp }}
+                      />
+                    </div>
 
-                  <button onClick={saveRecentEdit}
-                    style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: C.coral, color: '#fff', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-                    Guardar
-                  </button>
-                </div>
-              )}
-            </div>
+                    <button onClick={saveRecentEdit}
+                      style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: 'none', background: C.coral, color: '#fff', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+                      Guardar
+                    </button>
+                  </div>
+                )}
+              </ExpandContainer>
+            </li>
           );
         })}
+          </ul>
+        )}
       </div>
 
       {/* ─ Pie chart de categorías (al final) ──────────────────────────────── */}

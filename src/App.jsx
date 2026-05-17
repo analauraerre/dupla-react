@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 
 import LoginScreen   from './components/auth/LoginScreen';
@@ -16,8 +16,8 @@ import CardsTab      from './components/tabs/CardsTab';
 import { useDuplaData } from './hooks/useDuplaData.js';
 import { useTheme }     from './hooks/useTheme';
 import { fmt, fmtK }   from './utils/formatters';
+import { TransitionSwitch } from './motion/index.js';
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // ── MÁS PANEL ─────────────────────────────────────────────────────────────────
 // Standalone component so React can track its identity across renders.
@@ -166,6 +166,20 @@ function MasPanel({
 
       {/* ── VINCULAR SHEET ── */}
       <div style={{ fontSize: 13, fontWeight: 500, color: C.gray3, marginBottom: 10, letterSpacing: '0.4px', textTransform: 'uppercase' }}>Google Sheet</div>
+      {getSheetId() && (
+        <button
+          onClick={() => window.open(`https://docs.google.com/spreadsheets/d/${getSheetId()}`, '_blank')}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px',
+            background: C.white, borderRadius: 12, border: `0.5px solid ${C.border}`,
+            cursor: 'pointer', textAlign: 'left', width: '100%', marginBottom: 10 }}>
+          <span style={{ fontSize: 18, width: 28, textAlign: 'center', flexShrink: 0 }}>📊</span>
+          <div>
+            <div style={{ fontWeight: 500, fontSize: 14, color: C.gray1 }}>Ver en Google Sheets</div>
+            <div style={{ fontSize: 11, color: C.gray3, marginTop: 1 }}>Abre la hoja de auditoría</div>
+          </div>
+          <span style={{ marginLeft: 'auto', color: C.gray4, fontSize: 14 }}>↗</span>
+        </button>
+      )}
       <div style={{ ...Sx.fcard, marginBottom: 20 }}>
         <div style={Sx.ft}>Vincular hoja de cálculo</div>
         <div style={{ fontSize: 12, color: C.gray3, marginBottom: 10, lineHeight: 1.5 }}>
@@ -219,12 +233,54 @@ function MasPanel({
   );
 }
 
+// Tab position in the bottom nav — used to compute slide direction.
+// charts and cards are sub-views of mas (no nav button) → share its position.
+const TAB_POSITIONS = { home: 0, movements: 1, budget: 2, savings: 3, mas: 4, charts: 4, cards: 4 };
+const NAV_TABS = ['home', 'movements', 'budget', 'savings', 'mas'];
+
 // ── INNER APP (after auth) ─────────────────────────────────────────────────────
 function DuplaApp({ token, userInfo, onLogout, showSplash }) {
   const { C, themeId, setThemeId, THEME_LIST, fontScale, setFontScale } = useTheme();
 
   // UI-only navigation state — not part of domain data
   const [tab, setTab] = useState('home');
+
+  // Carousel direction: compare previous and current tab positions in the nav
+  const prevTabRef = useRef('home');
+  const prevIdx = TAB_POSITIONS[prevTabRef.current] ?? 0;
+  const currIdx = TAB_POSITIONS[tab] ?? 0;
+  const slideDir = currIdx > prevIdx ? 'left' : currIdx < prevIdx ? 'right' : 'neutral';
+  useEffect(() => { prevTabRef.current = tab; }, [tab]);
+
+  // Swipe-to-navigate: horizontal swipe on the content area steps one tab forward/back.
+  // Requires ≥50px horizontal displacement that exceeds vertical drift by 1.5×.
+  const swipeTouchRef = useRef(null);
+  const handleSwipeStart = useCallback((e) => {
+    // Walk up from the touch target to <main>. If any element has an opaque
+    // background-color (cards, panels, headers), deny the swipe — the user is
+    // touching a component, not the bare background.
+    let el = e.target;
+    while (el && el !== e.currentTarget) {
+      const bg = window.getComputedStyle(el).backgroundColor;
+      if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return;
+      el = el.parentElement;
+    }
+    const t = e.touches[0];
+    swipeTouchRef.current = { x: t.clientX, y: t.clientY };
+  }, []);
+  const handleSwipeEnd = useCallback((e) => {
+    if (!swipeTouchRef.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipeTouchRef.current.x;
+    const dy = t.clientY - swipeTouchRef.current.y;
+    swipeTouchRef.current = null;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const navTab = ['charts', 'cards'].includes(tab) ? 'mas' : tab;
+    const idx = NAV_TABS.indexOf(navTab);
+    const next = dx < 0 ? NAV_TABS[Math.min(idx + 1, NAV_TABS.length - 1)]
+                        : NAV_TABS[Math.max(idx - 1, 0)];
+    if (next !== navTab) setTab(next);
+  }, [tab]);
 
   const data = useDuplaData({ token, userId: userInfo?.sub, onLogout });
 
@@ -252,7 +308,7 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
   const shared = { ...data, getCat, fmt, fmtK, setTab };
 
   return (
-    <div style={{ fontFamily: "'Helvetica Neue',Arial,sans-serif", background: C.bg || '#FAFAF9', minHeight: '100vh', maxWidth: 520, margin: '0 auto' }}>
+    <div data-ui="app-shell" data-component="dupla-app" style={{ fontFamily: "'Helvetica Neue',Arial,sans-serif", background: C.bg || '#FAFAF9', minHeight: '100vh', maxWidth: 520, margin: '0 auto' }}>
       <Header
         selMonth={data.selMonth} selYear={data.selYear}
         setSelMonth={data.setSelMonth} setSelYear={data.setSelYear}
@@ -265,29 +321,31 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
           {data.syncError}
         </div>
       )}
-      <div style={{ padding: '16px 16px 0', paddingBottom: 96 }}>
+      <main data-ui="page" data-component="tab-content" onTouchStart={handleSwipeStart} onTouchEnd={handleSwipeEnd} style={{ padding: '16px 16px 0', paddingBottom: 96, overflowX: 'hidden' }}>
         <div style={{ zoom: fontScale }}>
-          {tab === 'home'      && <HomeTab       {...shared} />}
-          {tab === 'movements' && <MovimientosTab {...shared} />}
-          {tab === 'budget'    && <BudgetTab      {...shared} />}
-          {tab === 'savings'   && <SavingsTab     {...shared} />}
-          {tab === 'charts'    && <ChartsTab      {...shared} />}
-          {tab === 'cards'     && <CardsTab       {...shared} />}
-          {tab === 'mas'       && (
-            <MasPanel
-              themeId={themeId} setThemeId={setThemeId} THEME_LIST={THEME_LIST}
-              fontScale={fontScale} setFontScale={setFontScale}
-              setTab={setTab}
-              billingDayOfMonth={data.billingDayOfMonth} saveBillingDay={data.saveBillingDay}
-              userNames={data.userNames} saveUserNames={data.saveUserNames}
-              exchangeRate={data.exchangeRate} saveExchangeRate={data.saveExchangeRate}
-              exportCSV={data.exportCSV} exportGSheets={data.exportGSheets} exportToast={data.exportToast}
-              onLogout={onLogout} userInfo={userInfo}
-              getSheetId={data.getSheetId} setManualSheetId={data.setManualSheetId}
-            />
-          )}
+          <TransitionSwitch watchKey={tab} direction={slideDir}>
+            {tab === 'home'      && <HomeTab       {...shared} />}
+            {tab === 'movements' && <MovimientosTab {...shared} />}
+            {tab === 'budget'    && <BudgetTab      {...shared} />}
+            {tab === 'savings'   && <SavingsTab     {...shared} />}
+            {tab === 'charts'    && <ChartsTab      {...shared} />}
+            {tab === 'cards'     && <CardsTab       {...shared} />}
+            {tab === 'mas'       && (
+              <MasPanel
+                themeId={themeId} setThemeId={setThemeId} THEME_LIST={THEME_LIST}
+                fontScale={fontScale} setFontScale={setFontScale}
+                setTab={setTab}
+                billingDayOfMonth={data.billingDayOfMonth} saveBillingDay={data.saveBillingDay}
+                userNames={data.userNames} saveUserNames={data.saveUserNames}
+                exchangeRate={data.exchangeRate} saveExchangeRate={data.saveExchangeRate}
+                exportCSV={data.exportCSV} exportGSheets={data.exportGSheets} exportToast={data.exportToast}
+                onLogout={onLogout} userInfo={userInfo}
+                getSheetId={data.getSheetId} setManualSheetId={data.setManualSheetId}
+              />
+            )}
+          </TransitionSwitch>
         </div>
-      </div>
+      </main>
       <TabBar tab={tab} setTab={setTab} />
     </div>
   );
@@ -312,6 +370,16 @@ export default function App() {
     }
   }, []);
 
+  // Pick up token from OAuth redirect (ux_mode: 'redirect' puts token in URL hash)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const accessToken = params.get('access_token');
+    if (accessToken) {
+      window.history.replaceState(null, '', window.location.pathname);
+      handleLogin(accessToken);
+    }
+  }, [handleLogin]);
+
   const handleLogout = useCallback(() => {
     const sub = userInfo?.sub;
     setToken(null); setUserInfo(null);
@@ -320,6 +388,8 @@ export default function App() {
     localStorage.removeItem('dupla_sheet_id'); // legacy key
     if (sub) localStorage.removeItem(`dupla_sheet_id_${sub}`);
   }, [userInfo]);
+
+  const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   return (
     <GoogleOAuthProvider clientId={CLIENT_ID || ''}>

@@ -1,5 +1,5 @@
 import { useGoogleLogin } from '@react-oauth/google';
-import { useTheme } from '../../context/ThemeContext';
+import { useTheme } from '../../hooks/useTheme';
 import { DuplaLogo } from '../DuplaLogo';
 
 export default function LoginScreen({ onLogin }) {
@@ -61,7 +61,7 @@ export default function LoginScreen({ onLogin }) {
         </button>
 
         <div style={{ marginTop:20, padding:'12px 14px', background:C.sageL, borderRadius:10, border:`0.5px solid ${C.sage}33` }}>
-          <div style={{ fontSize:12, color:C.sage, fontWeight:500, marginBottom:4 }}>🔒 Tu privacidad, garantizada</div>
+          <div style={{ fontSize:12, color:C.sage, fontWeight:500, marginBottom:4 }}>Tu privacidad, garantizada</div>
           <div style={{ fontSize:11, color:C.gray3, lineHeight:1.6 }}>
             Solo pedimos acceso a Sheets para crear y leer <em>tu propio archivo</em>. No almacenamos tus datos en ningún servidor externo.
           </div>

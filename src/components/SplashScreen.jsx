@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useTheme } from '../context/ThemeContext';
+import { useTheme } from '../hooks/useTheme';
 import { DuplaLogo } from './DuplaLogo';
 
 export default function SplashScreen({ onDone }) {
@@ -10,7 +10,7 @@ export default function SplashScreen({ onDone }) {
     const t1 = setTimeout(() => setFading(true), 1300);
     const t2 = setTimeout(() => onDone(), 1700);
     return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, []);
+  }, [onDone]);
 
   return (
     <div style={{

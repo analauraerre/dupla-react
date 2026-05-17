@@ -1,25 +1,26 @@
-import { useState } from 'react';
+﻿import { useState, useRef } from 'react';
 import { MONTHS_FULL, PALETTE, ICON_OPTIONS } from '../../utils/constants';
-import { useTheme } from '../../context/ThemeContext';
-import { bKey } from '../../utils/budgets';
+import { useTheme } from '../../hooks/useTheme';
+import { ExpandContainer, HorizontalPager } from '../../motion/index.js';
+import { ACCORDION_CLEAR_DELAY } from '../../motion/motionPolicy.js';
 
 export default function BudgetTab({
   selMonth, selYear, categories, incomeCategories,
-  filtInc, totInc, totExp, totBudget, expByCat, incByCat,
-  effBudgets, effIncBudgets, overrides, incomeOverrides,
+  totExp, totBudget, expByCat, incByCat,
+  effBudgets, effIncBudgets,
   fmt, saveBudget, saveIncBudget, exchangeRate,
-  addCategory, deleteCategory, addIncomeCategory, deleteIncomeCategory,
+  addCategory, addIncomeCategory,
 }) {
   const { C, Sx } = useTheme();
   const [catFilter,      setCatFilter]      = useState('egresos'); // 'egresos' | 'ingresos'
   const [selectedCat,    setSelectedCat]    = useState(null);
+  const [closingCat,     setClosingCat]     = useState(null);
   const [editVal,        setEditVal]        = useState('');
+  const closeTimerRef = useRef(null);
   const [showNewCatForm, setShowNewCatForm] = useState(false);
-  const [newCat,         setNewCat]         = useState({ name: '', icon: '⭐', color: C.sage, bg: C.sageL });
-  const [newIncCat,      setNewIncCat]      = useState({ name: '', icon: '💰', color: C.sage, bg: C.sageL });
+  const [newCat,         setNewCat]         = useState({ name: '', icon: '*', color: C.sage, bg: C.sageL });
+  const [newIncCat,      setNewIncCat]      = useState({ name: '', icon: '$', color: C.sage, bg: C.sageL });
   const [showIconPick,   setShowIconPick]   = useState(false);
-
-  const totIncBudget = Object.values(effIncBudgets).reduce((a, b) => a + b, 0);
 
   const chipStyle = (active, activeColor, activeBg) => ({
     padding: '8px 20px',
@@ -33,27 +34,41 @@ export default function BudgetTab({
   });
 
   const selectCat = (name, currentVal) => {
+    clearTimeout(closeTimerRef.current);
     if (selectedCat === name) {
+      setClosingCat(name);
       setSelectedCat(null);
-      setEditVal('');
+      closeTimerRef.current = setTimeout(() => {
+        setEditVal('');
+        setClosingCat(null);
+      }, ACCORDION_CLEAR_DELAY);
     } else {
+      setClosingCat(null);
       setSelectedCat(name);
       setEditVal(String(currentVal));
     }
   };
 
+  const closeCatEditor = () => {
+    clearTimeout(closeTimerRef.current);
+    setClosingCat(selectedCat);
+    setSelectedCat(null);
+    closeTimerRef.current = setTimeout(() => {
+      setEditVal('');
+      setClosingCat(null);
+    }, ACCORDION_CLEAR_DELAY);
+  };
+
   const saveEgresoBudget = () => {
     if (!selectedCat) return;
     saveBudget(selectedCat, editVal);
-    setSelectedCat(null);
-    setEditVal('');
+    closeCatEditor();
   };
 
   const saveIngresoBudget = () => {
     if (!selectedCat) return;
     saveIncBudget(selectedCat, editVal);
-    setSelectedCat(null);
-    setEditVal('');
+    closeCatEditor();
   };
 
   const annualBudgetARS = totBudget * 12;
@@ -108,10 +123,11 @@ export default function BudgetTab({
         </button>
       </div>
 
-      {/* Lista de categorías */}
-      {catFilter === 'egresos' && (
-        <>
-          {/* Botón / formulario nueva categoría — arriba */}
+      {/* Sliding panels — both always in DOM, HorizontalPager slides between them */}
+      <HorizontalPager activeIndex={catFilter === 'egresos' ? 0 : 1}>
+
+        {/* ── PANEL 0: Egresos ── */}
+        <div>
           {!showNewCatForm ? (
             <button
               onClick={() => setShowNewCatForm(true)}
@@ -123,7 +139,7 @@ export default function BudgetTab({
             <div style={{ ...Sx.fcard, marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div style={Sx.ft}>Nueva categoría</div>
-                <button onClick={() => { setShowNewCatForm(false); setNewCat({ name: '', icon: '⭐', color: C.sage, bg: C.sageL }); }} style={{ ...Sx.xbtn, fontSize: 18 }}>✕</button>
+                <button onClick={() => { setShowNewCatForm(false); setNewCat({ name: '', icon: '*', color: C.sage, bg: C.sageL }); }} style={{ ...Sx.xbtn, fontSize: 18 }}>x</button>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button onClick={() => setShowIconPick(v => !v)} style={{ width: 46, height: 46, borderRadius: 10, border: `0.5px solid ${C.border}`, background: newCat.bg, fontSize: 22, cursor: 'pointer', flexShrink: 0 }}>{newCat.icon}</button>
@@ -143,7 +159,7 @@ export default function BudgetTab({
                   <button key={col} onClick={() => setNewCat(p => ({ ...p, color: col, bg: col + '22' }))} style={{ width: 26, height: 26, borderRadius: '50%', background: col, border: newCat.color === col ? `3px solid ${C.gray1}` : `3px solid ${C.white}`, cursor: 'pointer' }} />
                 ))}
               </div>
-              <button style={{ ...Sx.btn, width: '100%' }} onClick={() => { if (newCat.name.trim()) { addCategory(newCat); setNewCat({ name: '', icon: '⭐', color: C.sage, bg: C.sageL }); setShowNewCatForm(false); } }}>
+              <button style={{ ...Sx.btn, width: '100%' }} onClick={() => { if (newCat.name.trim()) { addCategory(newCat); setNewCat({ name: '', icon: '*', color: C.sage, bg: C.sageL }); setShowNewCatForm(false); } }}>
                 + Agregar categoría
               </button>
             </div>
@@ -155,20 +171,11 @@ export default function BudgetTab({
             const pct = bu ? Math.min((sp / bu) * 100, 100) : 0;
             const over = sp > bu && bu > 0;
             const isSelected = selectedCat === cat.name;
-
             return (
               <div key={cat.name} style={{ marginBottom: 8 }}>
-                {/* Row */}
                 <div
                   onClick={() => selectCat(cat.name, bu)}
-                  style={{
-                    background: C.white,
-                    borderRadius: isSelected ? '10px 10px 0 0' : 10,
-                    padding: '14px 16px',
-                    border: `0.5px solid ${isSelected ? C.coral : C.border}`,
-                    cursor: 'pointer',
-                    boxShadow: Sx.shadowSm,
-                  }}
+                  style={{ background: C.white, borderRadius: isSelected ? '10px 10px 0 0' : 10, padding: '14px 16px', border: `0.5px solid ${isSelected ? C.coral : C.border}`, cursor: 'pointer', boxShadow: Sx.shadowSm }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                     <div style={{ width: 40, height: 40, borderRadius: 10, background: cat.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{cat.icon}</div>
@@ -187,69 +194,41 @@ export default function BudgetTab({
                     </div>
                   )}
                 </div>
-
-                {/* Editor inline */}
-                {isSelected && (
-                  <div style={{
-                    background: C.white,
-                    borderRadius: '0 0 10px 10px',
-                    padding: '14px 16px',
-                    border: `0.5px solid ${C.coral}`,
-                    borderTop: `0.5px solid ${C.border}`,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Presupuesto mensual</div>
-                      <button onClick={() => { setSelectedCat(null); setEditVal(''); }} style={{ ...Sx.xbtn, fontSize: 18 }}>✕</button>
+                <ExpandContainer expanded={isSelected}>
+                  {(isSelected || closingCat === cat.name) && (
+                    <div style={{ background: C.white, borderRadius: '0 0 10px 10px', padding: '14px 16px', border: `0.5px solid ${C.coral}`, borderTop: `0.5px solid ${C.border}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Presupuesto mensual</div>
+                        <button onClick={closeCatEditor} style={{ ...Sx.xbtn, fontSize: 18 }}>x</button>
+                      </div>
+                      <input autoFocus={isSelected} type="text" inputMode="numeric" value={editVal} onChange={e => setEditVal(e.target.value.replace(/\D/g, ''))} onKeyDown={e => { if (e.key === 'Enter') saveEgresoBudget(); }} style={{ ...Sx.inp, marginBottom: 10 }} placeholder="Nuevo presupuesto" />
+                      <button onClick={saveEgresoBudget} style={{ ...Sx.btn, width: '100%' }}>Guardar</button>
                     </div>
-                    <input
-                      autoFocus
-                      type="text" inputMode="numeric"
-                      value={editVal}
-                      onChange={e => setEditVal(e.target.value.replace(/\D/g, ''))}
-                      onKeyDown={e => { if (e.key === 'Enter') saveEgresoBudget(); }}
-                      style={{ ...Sx.inp, marginBottom: 10 }}
-                      placeholder="Nuevo presupuesto"
-                    />
-                    <button onClick={saveEgresoBudget} style={{ ...Sx.btn, width: '100%' }}>Guardar</button>
-                  </div>
-                )}
+                  )}
+                </ExpandContainer>
               </div>
             );
           })}
 
-          {/* Botón nueva categoría — abajo también */}
           {!showNewCatForm && (
-            <button
-              onClick={() => setShowNewCatForm(true)}
-              style={{ width: '100%', padding: '12px 0', borderRadius: 10, border: `0.5px dashed ${C.border}`, background: 'transparent', color: C.gray3, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginTop: 4 }}
-            >
+            <button onClick={() => setShowNewCatForm(true)} style={{ width: '100%', padding: '12px 0', borderRadius: 10, border: `0.5px dashed ${C.border}`, background: 'transparent', color: C.gray3, fontSize: 13, fontWeight: 500, cursor: 'pointer', marginTop: 4 }}>
               + Categoría de egreso
             </button>
           )}
-        </>
-      )}
+        </div>
 
-      {catFilter === 'ingresos' && (
-        <>
+        {/* ── PANEL 1: Ingresos ── */}
+        <div>
           {incomeCategories.map(cat => {
             const actual  = incByCat[cat.name] || 0;
             const planned = effIncBudgets[cat.name] || 0;
             const pct     = planned ? Math.min((actual / planned) * 100, 100) : 0;
             const isSelected = selectedCat === cat.name;
-
             return (
               <div key={cat.name} style={{ marginBottom: 8 }}>
-                {/* Row */}
                 <div
                   onClick={() => selectCat(cat.name, planned)}
-                  style={{
-                    background: C.white,
-                    borderRadius: isSelected ? '10px 10px 0 0' : 10,
-                    padding: '14px 16px',
-                    border: `0.5px solid ${isSelected ? C.sage : C.border}`,
-                    cursor: 'pointer',
-                    boxShadow: Sx.shadowSm,
-                  }}
+                  style={{ background: C.white, borderRadius: isSelected ? '10px 10px 0 0' : 10, padding: '14px 16px', border: `0.5px solid ${isSelected ? C.sage : C.border}`, cursor: 'pointer', boxShadow: Sx.shadowSm }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                     <div style={{ width: 40, height: 40, borderRadius: 10, background: cat.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{cat.icon}</div>
@@ -268,37 +247,22 @@ export default function BudgetTab({
                     </div>
                   )}
                 </div>
-
-                {/* Editor inline */}
-                {isSelected && (
-                  <div style={{
-                    background: C.white,
-                    borderRadius: '0 0 10px 10px',
-                    padding: '14px 16px',
-                    border: `0.5px solid ${C.sage}`,
-                    borderTop: `0.5px solid ${C.border}`,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Presupuesto mensual</div>
-                      <button onClick={() => { setSelectedCat(null); setEditVal(''); }} style={{ ...Sx.xbtn, fontSize: 18 }}>✕</button>
+                <ExpandContainer expanded={isSelected}>
+                  {(isSelected || closingCat === cat.name) && (
+                    <div style={{ background: C.white, borderRadius: '0 0 10px 10px', padding: '14px 16px', border: `0.5px solid ${C.sage}`, borderTop: `0.5px solid ${C.border}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: C.gray2 }}>Presupuesto mensual</div>
+                        <button onClick={closeCatEditor} style={{ ...Sx.xbtn, fontSize: 18 }}>x</button>
+                      </div>
+                      <input autoFocus={isSelected} type="text" inputMode="numeric" value={editVal} onChange={e => setEditVal(e.target.value.replace(/\D/g, ''))} onKeyDown={e => { if (e.key === 'Enter') saveIngresoBudget(); }} style={{ ...Sx.inp, marginBottom: 10 }} placeholder="Nuevo presupuesto" />
+                      <button onClick={saveIngresoBudget} style={{ ...Sx.btn, width: '100%', background: C.sage }}>Guardar</button>
                     </div>
-                    <input
-                      autoFocus
-                      type="text" inputMode="numeric"
-                      value={editVal}
-                      onChange={e => setEditVal(e.target.value.replace(/\D/g, ''))}
-                      onKeyDown={e => { if (e.key === 'Enter') saveIngresoBudget(); }}
-                      style={{ ...Sx.inp, marginBottom: 10 }}
-                      placeholder="Nuevo presupuesto"
-                    />
-                    <button onClick={saveIngresoBudget} style={{ ...Sx.btn, width: '100%', background: C.sage }}>Guardar</button>
-                  </div>
-                )}
+                  )}
+                </ExpandContainer>
               </div>
             );
           })}
 
-          {/* Botón nueva categoría ingreso */}
           <div style={{ ...Sx.fcard, marginTop: 8 }}>
             <div style={Sx.ft}>Nueva categoría de ingreso</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
@@ -310,12 +274,13 @@ export default function BudgetTab({
                 <button key={col} onClick={() => setNewIncCat(p => ({ ...p, color: col, bg: col + '22' }))} style={{ width: 24, height: 24, borderRadius: '50%', background: col, border: newIncCat.color === col ? `3px solid ${C.gray1}` : `3px solid ${C.white}`, cursor: 'pointer' }} />
               ))}
             </div>
-            <button style={{ ...Sx.btn, background: C.sage, width: '100%' }} onClick={() => { if (newIncCat.name.trim()) { addIncomeCategory(newIncCat); setNewIncCat({ name: '', icon: '💰', color: C.sage, bg: C.sageL }); } }}>
+            <button style={{ ...Sx.btn, background: C.sage, width: '100%' }} onClick={() => { if (newIncCat.name.trim()) { addIncomeCategory(newIncCat); setNewIncCat({ name: '', icon: '$', color: C.sage, bg: C.sageL }); } }}>
               + Agregar
             </button>
           </div>
-        </>
-      )}
+        </div>
+
+      </HorizontalPager>
     </div>
   );
 }

@@ -1,54 +1,116 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 
-import { useGoogleSheets } from './useGoogleSheets.js';
-import { SEED, DEFAULT_CATEGORIES, DEFAULT_INCOME_CATEGORIES, PAYMENT_METHODS_FIXED, MONTHS_FULL } from '../utils/constants.js';
-import { fmt, fmtK, today, todayStr } from '../utils/formatters.js';
-
-import {
-  filterExpensesByMonth, filterIncomesByMonth,
-  addExpense, editExpense, deleteExpense,
-  addIncome, editIncome, deleteIncome,
-  applyRecurring,
-} from '../domain/movements/index.js';
-
-import { computeEffBudgets, applyBudgetOverride } from '../domain/budgets/index.js';
-
-import {
-  addSavingsAccount, deleteSavingsAccount,
-  addSavingsTx, deleteSavingsTx,
-  renameSavingsAccount, setSavingsAccountCurrency,
-  getAccountBalance, computeSavingsTotal, computeSavingGoalsTot,
-} from '../domain/savings/index.js';
-
+import { createSheetsRepository } from '../services/sheetsRepository.js';
+import { cuotaDelMes }            from '../domain/cuotas.js';
 import {
   computeExpByCategory, computeIncByCategory, computeExpByUser,
   computeAnnualData, computeAlerts, computePieData, computeBarData,
   computeProjected,
 } from '../domain/reports/selectors.js';
 
-/**
- * Central coordinator hook.
- * Owns all financial state and exposes actions + derived data to the UI.
- * React is used only for state, lifecycle, and memoization — domain logic lives in pure modules.
- */
-export function useDuplaData({ token, userId, onLogout }) {
-  const { load, save, setManualSheetId, getSheetId } = useGoogleSheets(token, userId);
+import { SEED, DEFAULT_CATEGORIES, DEFAULT_INCOME_CATEGORIES } from '../utils/constants.js';
+import { fmt, fmtK, today, todayStr } from '../utils/formatters.js';
 
-  // ── SYNC ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const MEDIO_PAGO_MAP = { efectivo: 'efectivo', debito: 'debito', débito: 'debito', debit: 'debito' };
+
+function normalizeMedioPago(paymentMethod, tarjeta) {
+  if (tarjeta) return 'tarjeta';
+  const key = (paymentMethod || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return MEDIO_PAGO_MAP[key] || 'efectivo';
+}
+
+// ── Seed data ─────────────────────────────────────────────────────────────────
+
+const DEFAULT_EGR_BUDGET = SEED.baseBudgets;
+
+function buildDefaultCategorias() {
+  return [
+    ...DEFAULT_CATEGORIES.map(c => ({
+      id: crypto.randomUUID(), tipo: 'egreso',
+      nombre: c.name, icono: c.icon, color: c.color, bg: c.bg,
+      presupuesto_base: DEFAULT_EGR_BUDGET[c.name] || 0,
+    })),
+    ...DEFAULT_INCOME_CATEGORIES.map(c => ({
+      id: crypto.randomUUID(), tipo: 'ingreso',
+      nombre: c.name, icono: c.icon, color: c.color, bg: c.bg,
+      presupuesto_base: 0,
+    })),
+  ];
+}
+
+// ── Optimistic _rowIndex helper ────────────────────────────────────────────────
+
+function nextRowIndex(arr) {
+  return arr.reduce((max, x) => Math.max(max, x._rowIndex || 1), 1) + 1;
+}
+
+// ── Backward-compat mappers ────────────────────────────────────────────────────
+// These let existing tabs keep using old field names (date, description, amount…).
+
+function gastoToExpense(g, categoriasMap, tarjetasMap) {
+  const cat = categoriasMap[g.categoria_id];
+  const tar = tarjetasMap[g.tarjeta_id];
+  return {
+    id:            g.id,
+    date:          g.fecha,
+    description:   g.descripcion,
+    category:      cat?.nombre || '',
+    user:          g.persona,
+    amount:        parseFloat(g.monto) || 0,
+    paymentMethod: tar?.nombre || g.medio_pago,
+    installments:  parseInt(g.cuotas) || 1,
+    _rowIndex:     g._rowIndex,
+  };
+}
+
+function ingresoToIncome(i, categoriasMap) {
+  const cat = categoriasMap[i.categoria_id];
+  const d   = new Date(i.fecha + 'T00:00:00');
+  return {
+    id:             i.id,
+    fecha:          i.fecha,
+    month:          d.getMonth(),
+    year:           d.getFullYear(),
+    description:    i.descripcion,
+    incomeCategory: cat?.nombre || '',
+    user:           i.persona,
+    amount:         parseFloat(i.monto) || 0,
+    _rowIndex:      i._rowIndex,
+  };
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+export function useDuplaData({ token, userId, onLogout }) {
+  // ── Repository (recreated only when token/userId changes) ─────────────────
+  const repoRef = useRef(null);
+  if (
+    !repoRef.current ||
+    repoRef.current._token  !== token ||
+    repoRef.current._userId !== userId
+  ) {
+    repoRef.current = token
+      ? { ...createSheetsRepository(token, userId), _token: token, _userId: userId }
+      : null;
+  }
+  const repo = repoRef.current;
+
+  // ── Sync state ────────────────────────────────────────────────────────────
   const [loading,   setLoading]   = useState(true);
   const [syncing,   setSyncing]   = useState(false);
   const [lastSync,  setLastSync]  = useState(null);
   const [syncError, setSyncError] = useState('');
 
-  // ── NAV ───────────────────────────────────────────────────────────────────
+  // ── Nav ───────────────────────────────────────────────────────────────────
   const [selMonth, setSelMonth] = useState(today.getMonth());
   const [selYear,  setSelYear]  = useState(today.getFullYear());
 
-  // ── SETTINGS ──────────────────────────────────────────────────────────────
+  // ── Settings (localStorage only, no Sheets) ───────────────────────────────
   const [billingDayOfMonth, setBillingDayOfMonth] = useState(() => {
-    const stored = localStorage.getItem('dupla_billing_day');
-    if (!stored || stored === '27') { localStorage.setItem('dupla_billing_day', '1'); return 1; }
-    return parseInt(stored, 10);
+    const s = localStorage.getItem('dupla_billing_day');
+    return s ? parseInt(s, 10) : 1;
   });
   const [userNames, setUserNames] = useState(() => {
     try { return JSON.parse(localStorage.getItem('dupla_user_names') || '["Ana","Fabio"]'); } catch { return ['Ana', 'Fabio']; }
@@ -57,23 +119,527 @@ export function useDuplaData({ token, userId, onLogout }) {
     parseFloat(localStorage.getItem('dupla_exchange_rate') || '1100')
   );
 
-  // ── DATA ──────────────────────────────────────────────────────────────────
-  const [expenses,         setExpenses]         = useState([]);
-  const [incomes,          setIncomes]          = useState([]);
-  const [savingGoals,      setSavingGoals]      = useState([]);
-  const [base,             setBase]             = useState(SEED.baseBudgets);
-  const [overrides,        setOverrides]        = useState({});
-  const [categories,       setCategories]       = useState(DEFAULT_CATEGORIES);
-  const [incomeCategories, setIncomeCategories] = useState(DEFAULT_INCOME_CATEGORIES);
-  const [incomeBase,       setIncomeBase]       = useState(SEED.incomeBaseBudgets);
-  const [incomeOverrides,  setIncomeOverrides]  = useState({});
-  const [recurring,        setRecurring]        = useState([]);
-  const [notes,            setNotes]            = useState({});
-  const [creditCards,      setCreditCards]      = useState([]);
-  const [splits,           setSplits]           = useState([]);
-  const [savingsAccounts,  setSavingsAccounts]  = useState([]);
+  // ── Raw data (new model) ──────────────────────────────────────────────────
+  const [gastos,        setGastos]        = useState([]);
+  const [ingresos,      setIngresos]      = useState([]);
+  const [categorias,    setCategorias]    = useState([]);
+  const [tarjetas,      setTarjetas]      = useState([]);
+  const [recurrentes,   setRecurrentes]   = useState([]);
+  const [cuentas,       setCuentas]       = useState([]);
+  const [transacciones, setTransacciones] = useState([]);
 
-  // ── SETTINGS SAVERS ───────────────────────────────────────────────────────
+  // ── Load ──────────────────────────────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    if (!repo) return;
+    try {
+      const tabs = await repo.loadAll();
+      const byName = Object.fromEntries(tabs.map(t => [t.tabName, t.rows]));
+
+      let cats = byName.Categorias || [];
+
+      // Seed categories on first run.
+      if (cats.length === 0) {
+        const defaults = buildDefaultCategorias();
+        await repo.appendRows('Categorias', defaults);
+        cats = defaults.map((c, i) => ({ ...c, _rowIndex: i + 2 }));
+      }
+
+      setGastos(byName.Gastos       || []);
+      setIngresos(byName.Ingresos   || []);
+      setCategorias(cats);
+      setTarjetas(byName.Tarjetas   || []);
+      setRecurrentes(byName.Recurrentes || []);
+      setCuentas(byName.Cuentas     || []);
+      setTransacciones(byName.Transacciones || []);
+      setLastSync(new Date());
+    } catch (err) {
+      if (err?.message === 'AUTH_EXPIRED') { onLogout(); return; }
+      console.error('[Dupla] Load error', err);
+      setSyncError('No pudimos conectar con Google Sheets. Revisá tu conexión.');
+    }
+  }, [repo, onLogout]);
+
+  useEffect(() => {
+    setLoading(true);
+    loadData().finally(() => setLoading(false));
+  }, [loadData]);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setSyncError('');
+    await loadData();
+    setLoading(false);
+  }, [loadData]);
+
+  // ── Derived: indexes ──────────────────────────────────────────────────────
+  const categoriasMap = useMemo(
+    () => Object.fromEntries(categorias.map(c => [c.id, c])),
+    [categorias]
+  );
+  const tarjetasMap = useMemo(
+    () => Object.fromEntries(tarjetas.map(t => [t.id, t])),
+    [tarjetas]
+  );
+
+  // ── Derived: backward-compat category arrays (old field names) ─────────────
+  const categories = useMemo(
+    () => categorias
+      .filter(c => c.tipo === 'egreso')
+      .map(c => ({ id: c.id, name: c.nombre, icon: c.icono, color: c.color, bg: c.bg, _rowIndex: c._rowIndex })),
+    [categorias]
+  );
+  const incomeCategories = useMemo(
+    () => categorias
+      .filter(c => c.tipo === 'ingreso')
+      .map(c => ({ id: c.id, name: c.nombre, icon: c.icono, color: c.color, bg: c.bg, _rowIndex: c._rowIndex })),
+    [categorias]
+  );
+
+  // ── Derived: budgets (simple, no walk-back) ────────────────────────────────
+  const effBudgets = useMemo(
+    () => Object.fromEntries(
+      categorias.filter(c => c.tipo === 'egreso').map(c => [c.nombre, parseFloat(c.presupuesto_base) || 0])
+    ),
+    [categorias]
+  );
+  const effIncBudgets = useMemo(
+    () => Object.fromEntries(
+      categorias.filter(c => c.tipo === 'ingreso').map(c => [c.nombre, parseFloat(c.presupuesto_base) || 0])
+    ),
+    [categorias]
+  );
+
+  // ── Derived: old-shape expense arrays ─────────────────────────────────────
+  // `expenses` = all gastos mapped to old shape (full monto, not cuota).
+  const expenses = useMemo(
+    () => gastos.map(g => gastoToExpense(g, categoriasMap, tarjetasMap)),
+    [gastos, categoriasMap, tarjetasMap]
+  );
+
+  // `filtExp` = gastos where cuotaDelMes > 0 in selected month, amount = cuota.
+  const filtExp = useMemo(
+    () => gastos.flatMap(g => {
+      const amt = cuotaDelMes(g, selMonth, selYear);
+      if (amt === 0) return [];
+      const cat = categoriasMap[g.categoria_id];
+      const tar = tarjetasMap[g.tarjeta_id];
+      return [{
+        id:            g.id,
+        date:          g.fecha,
+        description:   g.descripcion,
+        category:      cat?.nombre || '',
+        user:          g.persona,
+        amount:        amt,
+        paymentMethod: tar?.nombre || g.medio_pago,
+        installments:  parseInt(g.cuotas) || 1,
+        _rowIndex:     g._rowIndex,
+      }];
+    }),
+    [gastos, selMonth, selYear, categoriasMap, tarjetasMap]
+  );
+
+  // `incomes` = all ingresos in old shape.
+  const incomes = useMemo(
+    () => ingresos.map(i => ingresoToIncome(i, categoriasMap)),
+    [ingresos, categoriasMap]
+  );
+
+  // `filtInc` = ingresos for selected month/year.
+  const filtInc = useMemo(
+    () => ingresos.flatMap(i => {
+      const d = new Date(i.fecha + 'T00:00:00');
+      if (d.getMonth() !== selMonth || d.getFullYear() !== selYear) return [];
+      return [ingresoToIncome(i, categoriasMap)];
+    }),
+    [ingresos, selMonth, selYear, categoriasMap]
+  );
+
+  // ── Derived: savings accounts (nested structure for SavingsTab) ────────────
+  const savingsAccounts = useMemo(
+    () => cuentas.map(c => ({
+      id:       c.id,
+      name:     c.nombre,
+      currency: c.moneda || 'ARS',
+      target:   parseFloat(c.target) || 0,
+      _rowIndex: c._rowIndex,
+      transactions: transacciones
+        .filter(t => t.cuenta_id === c.id)
+        .map(t => ({
+          id:        t.id,
+          amount:    parseFloat(t.monto) || 0,
+          note:      t.nota,
+          date:      t.fecha,
+          _rowIndex: t._rowIndex,
+        })),
+    })),
+    [cuentas, transacciones]
+  );
+
+  // ── Derived: credit cards (old shape) ──────────────────────────────────────
+  const creditCards = useMemo(
+    () => tarjetas.map(t => ({
+      id:         t.id,
+      name:       t.nombre,
+      limit:      parseFloat(t.limite) || 0,
+      closingDay: parseInt(t.dia_cierre) || 1,
+      _rowIndex:  t._rowIndex,
+    })),
+    [tarjetas]
+  );
+
+  // ── Derived: recurrentes pendientes (not applied this month yet) ───────────
+  const recurrentesPendientes = useMemo(() => {
+    const applied = new Set(
+      gastos
+        .filter(g => {
+          if (!g.recurrente_id) return false;
+          const d = new Date(g.fecha + 'T00:00:00');
+          return d.getMonth() === selMonth && d.getFullYear() === selYear;
+        })
+        .map(g => g.recurrente_id)
+    );
+    return recurrentes.filter(r => {
+      if (r.activo !== 'true' && r.activo !== true) return false;
+      const desde = new Date((r.desde || '2000-01-01') + 'T00:00:00');
+      const desdeIdx = desde.getFullYear() * 12 + desde.getMonth();
+      const selIdx   = selYear * 12 + selMonth;
+      return selIdx >= desdeIdx && !applied.has(r.id);
+    });
+  }, [gastos, recurrentes, selMonth, selYear]);
+
+  // ── Derived: totals ────────────────────────────────────────────────────────
+  const totExp     = filtExp.reduce((s, e) => s + e.amount, 0);
+  const totInc     = filtInc.reduce((s, i) => s + i.amount, 0);
+  const balance    = totInc - totExp;
+  const totBudget  = Object.values(effBudgets).reduce((a, b) => a + b, 0);
+
+  const prevMonth = selMonth === 0 ? 11 : selMonth - 1;
+  const prevYear  = selMonth === 0 ? selYear - 1 : selYear;
+  const totExpPrevMonth = useMemo(() => {
+    return gastos.reduce((s, g) => s + cuotaDelMes(g, prevMonth, prevYear), 0);
+  }, [gastos, prevMonth, prevYear]);
+
+  const savingsTotal = useMemo(
+    () => savingsAccounts
+      .filter(a => a.currency === 'ARS')
+      .reduce((s, a) => s + a.transactions.reduce((t, tx) => t + tx.amount, 0), 0),
+    [savingsAccounts]
+  );
+
+  // ── Derived: report selectors ──────────────────────────────────────────────
+  const expByCat   = useMemo(() => computeExpByCategory(filtExp), [filtExp]);
+  const incByCat   = useMemo(() => computeIncByCategory(filtInc), [filtInc]);
+  const expByUser  = useMemo(() => computeExpByUser(filtExp),     [filtExp]);
+  const annualData = useMemo(() => computeAnnualData(expenses, incomes, selYear), [expenses, incomes, selYear]);
+
+  const daysInMonth = new Date(selYear, selMonth + 1, 0).getDate();
+  const dayNow      = selMonth === today.getMonth() && selYear === today.getFullYear()
+    ? today.getDate() : daysInMonth;
+  const projected   = computeProjected(totExp, dayNow, daysInMonth);
+
+  const alerts  = useMemo(() => computeAlerts(categories,  expByCat, effBudgets), [categories, expByCat, effBudgets]);
+  const pieData = useMemo(() => computePieData(categories, expByCat),              [categories, expByCat]);
+  const barData = useMemo(() => computeBarData(categories, expByCat, effBudgets), [categories, expByCat, effBudgets]);
+
+  // ── Error wrapper for actions ──────────────────────────────────────────────
+  async function withSync(label, fn) {
+    setSyncing(true);
+    try {
+      await fn();
+      setLastSync(new Date());
+      setSyncError('');
+    } catch (err) {
+      if (err?.message === 'AUTH_EXPIRED') { onLogout(); return; }
+      console.error(`[Dupla] ${label}`, err);
+      setSyncError(`No se pudo ${label}. Revisá tu conexión y presioná Actualizar.`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // ── Actions: expenses ──────────────────────────────────────────────────────
+
+  const addExpense = useCallback(async (form) => {
+    // form is old-model shape from HomeTab:
+    // { description, amount, category (name), user, date, paymentMethod, installments }
+    const cat = categorias.find(c => c.nombre === form.category && c.tipo === 'egreso');
+    const tar = tarjetas.find(t => t.nombre === form.paymentMethod);
+    const gasto = {
+      id:           crypto.randomUUID(),
+      fecha:        form.date,
+      descripcion:  form.description || '',
+      categoria_id: cat?.id || '',
+      persona:      form.user || '',
+      monto:        String(form.amount || 0),
+      medio_pago:   normalizeMedioPago(form.paymentMethod, tar),
+      tarjeta_id:   tar?.id || '',
+      cuotas:       String(form.installments || 1),
+      recurrente_id: '',
+      creado_en:    new Date().toISOString(),
+    };
+    const optimistic = { ...gasto, _rowIndex: nextRowIndex(gastos) };
+    setGastos(prev => [...prev, optimistic]);
+    await withSync('guardar el gasto', () => repo.appendRow('Gastos', gasto));
+  }, [categorias, tarjetas, gastos, repo]);
+
+  const editExpense = useCallback(async (id, updates) => {
+    // updates is old-model shape from MovimientosTab/HomeTab
+    const g = gastos.find(x => x.id === id);
+    if (!g) return;
+    const cat = categorias.find(c => c.nombre === updates.category && c.tipo === 'egreso');
+    const tar = tarjetas.find(t => t.nombre === updates.paymentMethod);
+    const updated = {
+      ...g,
+      descripcion:  updates.description ?? g.descripcion,
+      categoria_id: cat?.id ?? g.categoria_id,
+      persona:      updates.user ?? g.persona,
+      medio_pago:   updates.paymentMethod !== undefined ? normalizeMedioPago(updates.paymentMethod, tar) : g.medio_pago,
+      tarjeta_id:   tar?.id ?? g.tarjeta_id,
+      // monto and cuotas are immutable for installment expenses
+    };
+    setGastos(prev => prev.map(x => x.id === id ? updated : x));
+    await withSync('editar el gasto', () => repo.updateRow('Gastos', g._rowIndex, updated));
+  }, [gastos, categorias, tarjetas, repo]);
+
+  const delExp = useCallback(async (id) => {
+    const g = gastos.find(x => x.id === id);
+    if (!g) return;
+    const deletedIdx = g._rowIndex;
+    setGastos(prev =>
+      prev
+        .filter(x => x.id !== id)
+        .map(x => x._rowIndex > deletedIdx ? { ...x, _rowIndex: x._rowIndex - 1 } : x)
+    );
+    await withSync('eliminar el gasto', () => repo.deleteRow('Gastos', deletedIdx));
+  }, [gastos, repo]);
+
+  // ── Actions: incomes ───────────────────────────────────────────────────────
+
+  const addIncomeQuick = useCallback(async (form) => {
+    // form is old-model shape from HomeTab:
+    // { description, amount, user, incomeCategory (name), month, year }
+    const cat    = categorias.find(c => c.nombre === form.incomeCategory && c.tipo === 'ingreso');
+    const month  = form.month ?? today.getMonth();
+    const year   = form.year  ?? today.getFullYear();
+    const fecha  = `${year}-${String(month + 1).padStart(2, '0')}-15`;
+    const ingreso = {
+      id:           crypto.randomUUID(),
+      fecha,
+      descripcion:  form.description || '',
+      categoria_id: cat?.id || '',
+      persona:      form.user || '',
+      monto:        String(form.amount || 0),
+      creado_en:    new Date().toISOString(),
+    };
+    const optimistic = { ...ingreso, _rowIndex: nextRowIndex(ingresos) };
+    setIngresos(prev => [...prev, optimistic]);
+    await withSync('guardar el ingreso', () => repo.appendRow('Ingresos', ingreso));
+  }, [categorias, ingresos, repo]);
+
+  const addIncome = addIncomeQuick;
+
+  const editIncome = useCallback(async (id, updates) => {
+    const i = ingresos.find(x => x.id === id);
+    if (!i) return;
+    const cat = categorias.find(c => c.nombre === updates.incomeCategory && c.tipo === 'ingreso');
+    const updated = {
+      ...i,
+      descripcion:  updates.description ?? i.descripcion,
+      categoria_id: cat?.id ?? i.categoria_id,
+      persona:      updates.user ?? i.persona,
+    };
+    setIngresos(prev => prev.map(x => x.id === id ? updated : x));
+    await withSync('editar el ingreso', () => repo.updateRow('Ingresos', i._rowIndex, updated));
+  }, [ingresos, categorias, repo]);
+
+  const delInc = useCallback(async (id) => {
+    const i = ingresos.find(x => x.id === id);
+    if (!i) return;
+    const deletedIdx = i._rowIndex;
+    setIngresos(prev =>
+      prev
+        .filter(x => x.id !== id)
+        .map(x => x._rowIndex > deletedIdx ? { ...x, _rowIndex: x._rowIndex - 1 } : x)
+    );
+    await withSync('eliminar el ingreso', () => repo.deleteRow('Ingresos', deletedIdx));
+  }, [ingresos, repo]);
+
+  // ── Actions: budgets ───────────────────────────────────────────────────────
+
+  const saveBudget = useCallback(async (catName, val) => {
+    const cat = categorias.find(c => c.nombre === catName);
+    if (!cat) return;
+    const updated = { ...cat, presupuesto_base: String(parseFloat(val) || 0) };
+    setCategorias(prev => prev.map(c => c.id === cat.id ? updated : c));
+    await withSync('guardar presupuesto', () => repo.updateRow('Categorias', cat._rowIndex, updated));
+  }, [categorias, repo]);
+
+  // Income budgets share the same Categorias tab — same action.
+  const saveIncBudget = saveBudget;
+
+  // ── Actions: categories ────────────────────────────────────────────────────
+
+  const addCategory = useCallback(async ({ name, icon, color, bg }) => {
+    if (!name.trim()) return;
+    if (categorias.some(c => c.nombre.toLowerCase() === name.trim().toLowerCase())) return;
+    const cat = {
+      id:              crypto.randomUUID(),
+      tipo:            'egreso',
+      nombre:          name.trim(),
+      icono:           icon || '📦',
+      color:           color || '#78716C',
+      bg:              bg || '#FAFAF9',
+      presupuesto_base: '0',
+    };
+    setCategorias(prev => [...prev, { ...cat, _rowIndex: nextRowIndex(categorias) }]);
+    await withSync('guardar la categoría', () => repo.appendRow('Categorias', cat));
+  }, [categorias, repo]);
+
+  const addIncomeCategory = useCallback(async ({ name, icon, color, bg }) => {
+    if (!name.trim()) return;
+    if (categorias.some(c => c.nombre.toLowerCase() === name.trim().toLowerCase())) return;
+    const cat = {
+      id:              crypto.randomUUID(),
+      tipo:            'ingreso',
+      nombre:          name.trim(),
+      icono:           icon || '📦',
+      color:           color || '#78716C',
+      bg:              bg || '#FAFAF9',
+      presupuesto_base: '0',
+    };
+    setCategorias(prev => [...prev, { ...cat, _rowIndex: nextRowIndex(categorias) }]);
+    await withSync('guardar la categoría', () => repo.appendRow('Categorias', cat));
+  }, [categorias, repo]);
+
+  const deleteCategory = useCallback(async (name) => {
+    const cat = categorias.find(c => c.nombre === name);
+    if (!cat) return;
+    const deletedIdx = cat._rowIndex;
+    setCategorias(prev =>
+      prev
+        .filter(c => c.nombre !== name)
+        .map(c => c._rowIndex > deletedIdx ? { ...c, _rowIndex: c._rowIndex - 1 } : c)
+    );
+    await withSync('eliminar la categoría', () => repo.deleteRow('Categorias', deletedIdx));
+  }, [categorias, repo]);
+
+  const deleteIncomeCategory = deleteCategory;
+
+  // ── Actions: credit cards ──────────────────────────────────────────────────
+
+  const addCard = useCallback(async ({ name, limit }) => {
+    if (!name.trim()) return;
+    const card = {
+      id:         crypto.randomUUID(),
+      nombre:     name.trim(),
+      limite:     String(parseFloat(limit) || 0),
+      dia_cierre: '1',
+    };
+    setTarjetas(prev => [...prev, { ...card, _rowIndex: nextRowIndex(tarjetas) }]);
+    await withSync('guardar la tarjeta', () => repo.appendRow('Tarjetas', card));
+  }, [tarjetas, repo]);
+
+  // ── Actions: savings accounts ──────────────────────────────────────────────
+
+  const addSavingsAccount = useCallback(async ({ name, currency }) => {
+    if (!name.trim()) return;
+    const cuenta = {
+      id:     crypto.randomUUID(),
+      nombre: name.trim(),
+      moneda: currency || 'ARS',
+      target: '0',
+    };
+    setCuentas(prev => [...prev, { ...cuenta, _rowIndex: nextRowIndex(cuentas) }]);
+    await withSync('crear la cuenta', () => repo.appendRow('Cuentas', cuenta));
+  }, [cuentas, repo]);
+
+  const saveSavAccCurrency = useCallback(async (id, currency) => {
+    const c = cuentas.find(x => x.id === id);
+    if (!c) return;
+    const updated = { ...c, moneda: currency };
+    setCuentas(prev => prev.map(x => x.id === id ? updated : x));
+    await withSync('cambiar moneda', () => repo.updateRow('Cuentas', c._rowIndex, updated));
+  }, [cuentas, repo]);
+
+  const saveSavAccName = useCallback(async (id, name) => {
+    if (!name.trim()) return;
+    const c = cuentas.find(x => x.id === id);
+    if (!c) return;
+    const updated = { ...c, nombre: name.trim() };
+    setCuentas(prev => prev.map(x => x.id === id ? updated : x));
+    await withSync('renombrar cuenta', () => repo.updateRow('Cuentas', c._rowIndex, updated));
+  }, [cuentas, repo]);
+
+  const deleteSavingsAccount = useCallback(async (id) => {
+    const c = cuentas.find(x => x.id === id);
+    if (!c) return;
+    const deletedIdx = c._rowIndex;
+    setCuentas(prev =>
+      prev
+        .filter(x => x.id !== id)
+        .map(x => x._rowIndex > deletedIdx ? { ...x, _rowIndex: x._rowIndex - 1 } : x)
+    );
+    // Orphaned transacciones for this account remain in Sheets but won't be shown (no cuenta match).
+    await withSync('eliminar la cuenta', () => repo.deleteRow('Cuentas', deletedIdx));
+  }, [cuentas, repo]);
+
+  const addSavTx = useCallback(async (accId, { type, amount, note }) => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    const finalAmt = type === 'sub' ? -amt : amt;
+    const tx = {
+      id:        crypto.randomUUID(),
+      cuenta_id: accId,
+      fecha:     todayStr,
+      monto:     String(finalAmt),
+      nota:      note || '',
+      creado_en: new Date().toISOString(),
+    };
+    setTransacciones(prev => [...prev, { ...tx, _rowIndex: nextRowIndex(transacciones) }]);
+    await withSync('guardar el movimiento', () => repo.appendRow('Transacciones', tx));
+  }, [transacciones, repo]);
+
+  const deleteSavTx = useCallback(async (accId, txId) => {
+    const tx = transacciones.find(t => t.id === txId && t.cuenta_id === accId);
+    if (!tx) return;
+    const deletedIdx = tx._rowIndex;
+    setTransacciones(prev =>
+      prev
+        .filter(t => t.id !== txId)
+        .map(t => t._rowIndex > deletedIdx ? { ...t, _rowIndex: t._rowIndex - 1 } : t)
+    );
+    await withSync('eliminar el movimiento', () => repo.deleteRow('Transacciones', deletedIdx));
+  }, [transacciones, repo]);
+
+  const getAccBalance = useCallback(
+    (acc) => acc.transactions.reduce((s, t) => s + t.amount, 0),
+    []
+  );
+
+  // ── Actions: recurrentes ───────────────────────────────────────────────────
+
+  const applyRecurrente = useCallback(async (rec) => {
+    const dia   = parseInt(rec.dia_del_mes) || 1;
+    const fecha = `${selYear}-${String(selMonth + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const gasto = {
+      id:           crypto.randomUUID(),
+      fecha,
+      descripcion:  rec.descripcion,
+      categoria_id: rec.categoria_id,
+      persona:      rec.persona,
+      monto:        String(rec.monto),
+      medio_pago:   rec.medio_pago,
+      tarjeta_id:   rec.tarjeta_id || '',
+      cuotas:       '1',
+      recurrente_id: rec.id,
+      creado_en:    new Date().toISOString(),
+    };
+    setGastos(prev => [...prev, { ...gasto, _rowIndex: nextRowIndex(gastos) }]);
+    await withSync('aplicar recurrente', () => repo.appendRow('Gastos', gasto));
+  }, [selMonth, selYear, gastos, repo]);
+
+  // ── Settings savers (localStorage only) ───────────────────────────────────
+
   const saveBillingDay = useCallback(day => {
     setBillingDayOfMonth(day);
     localStorage.setItem('dupla_billing_day', String(day));
@@ -90,241 +656,21 @@ export function useDuplaData({ token, userId, onLogout }) {
     localStorage.setItem('dupla_exchange_rate', String(num));
   }, []);
 
-  // ── PERSIST ───────────────────────────────────────────────────────────────
-  const persist = useCallback(async (updates = {}) => {
-    setSyncing(true);
-    setSyncError('');
-    const snapshot = {
-      expenses, incomes, savingGoals,
-      baseBudgets: base, budgetOverrides: overrides,
-      categories, incomeCategories,
-      incomeBaseBudgets: incomeBase, incomeBudgetOverrides: incomeOverrides,
-      recurringExpenses: recurring, monthNotes: notes,
-      creditCards, splits, savingsAccounts,
-      ...updates,
-    };
-    try {
-      await save(snapshot);
-      setLastSync(new Date());
-    } catch (e) {
-      console.error('[Dupla] Save error', e);
-      setSyncError('No pudimos guardar los cambios. Revisá tu conexión y volvé a intentar.');
-    }
-    setSyncing(false);
-  }, [
-    expenses, incomes, savingGoals, base, overrides,
-    categories, incomeCategories, incomeBase, incomeOverrides,
-    recurring, notes, creditCards, splits, savingsAccounts, save,
-  ]);
-
-  // ── LOAD ──────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    load().then(result => {
-      if (!result.ok) {
-        console.warn('[Dupla] Invalid persisted data', result.issues || result.error);
-        setSyncError('Los datos guardados no tienen el formato esperado. Cargamos una base segura sin sobrescribir tu Sheet.');
-      }
-      const d = result.data;
-      if (d && d.expenses) {
-        const rec  = d.recurringExpenses || [];
-        const exp  = d.expenses || [];
-        const auto = applyRecurring(rec, exp, today);
-        const finalExp = auto.length ? [...exp, ...auto] : exp;
-        setExpenses(finalExp); setIncomes(d.incomes || []); setSavingGoals(d.savingGoals || []);
-        setBase(d.baseBudgets || SEED.baseBudgets); setOverrides(d.budgetOverrides || {});
-        setCategories(d.categories || DEFAULT_CATEGORIES); setRecurring(rec);
-        setIncomeCategories(d.incomeCategories || DEFAULT_INCOME_CATEGORIES);
-        setIncomeBase(d.incomeBaseBudgets || SEED.incomeBaseBudgets);
-        setIncomeOverrides(d.incomeBudgetOverrides || {});
-        setNotes(d.monthNotes || {}); setCreditCards(d.creditCards || []); setSplits(d.splits || []);
-        setSavingsAccounts((d.savingsAccounts || []).map(a => ({ ...a, currency: a.currency || 'ARS' })));
-        setLastSync(new Date());
-        if (result.ok && (auto.length || result.migrated)) {
-          save({ ...d, expenses: finalExp }).catch(err => {
-            console.error('[Dupla] Migration save error', err);
-            setSyncError('Los datos cargaron bien, pero no pudimos guardar la migración automática.');
-          });
-        }
-      }
-      setLoading(false);
-    }).catch(err => {
-      if (err?.message === 'AUTH_EXPIRED') { onLogout(); return; }
-      console.error('[Dupla] Load error', err);
-      setSyncError('No pudimos conectar con Google Sheets. Revisá tu conexión o iniciá sesión nuevamente.');
-      setLoading(false);
-    });
-  }, [load, onLogout, save]);
-
-  // ── DERIVED ───────────────────────────────────────────────────────────────
-  const paymentMethods = useMemo(
-    () => [...PAYMENT_METHODS_FIXED, ...creditCards.map(c => c.name)],
-    [creditCards]
-  );
-
-  const effBudgets    = useMemo(() => computeEffBudgets(categories,       selMonth, selYear, base,       overrides),       [categories,       selMonth, selYear, base,       overrides]);
-  const effIncBudgets = useMemo(() => computeEffBudgets(incomeCategories, selMonth, selYear, incomeBase, incomeOverrides), [incomeCategories, selMonth, selYear, incomeBase, incomeOverrides]);
-
-  const filtExp = useMemo(() => filterExpensesByMonth(expenses, selMonth, selYear), [expenses, selMonth, selYear]);
-  const filtInc = useMemo(() => filterIncomesByMonth(incomes,   selMonth, selYear), [incomes,  selMonth, selYear]);
-
-  const prevMonth = selMonth === 0 ? 11 : selMonth - 1;
-  const prevYear  = selMonth === 0 ? selYear - 1 : selYear;
-  const totExpPrevMonth = useMemo(
-    () => filterExpensesByMonth(expenses, prevMonth, prevYear).reduce((s, e) => s + e.amount, 0),
-    [expenses, prevMonth, prevYear]
-  );
-
-  const totExp = filtExp.reduce((s, e) => s + e.amount, 0);
-  const totInc = filtInc.reduce((s, i) => s + i.amount, 0);
-  const totSav = useMemo(() => computeSavingGoalsTot(savingGoals, selMonth, selYear), [savingGoals, selMonth, selYear]);
-  const savingsTotal = useMemo(() => computeSavingsTotal(savingsAccounts), [savingsAccounts]);
-  const balance    = totInc - totExp - totSav;
-  const totBudget  = Object.values(effBudgets).reduce((a, b) => a + b, 0);
-
-  const expByCat  = useMemo(() => computeExpByCategory(filtExp), [filtExp]);
-  const incByCat  = useMemo(() => computeIncByCategory(filtInc), [filtInc]);
-  const expByUser = useMemo(() => computeExpByUser(filtExp),     [filtExp]);
-  const annualData = useMemo(() => computeAnnualData(expenses, incomes, selYear), [expenses, incomes, selYear]);
-
-  const daysInMonth = new Date(selYear, selMonth + 1, 0).getDate();
-  const dayNow      = selMonth === today.getMonth() && selYear === today.getFullYear() ? today.getDate() : daysInMonth;
-  const projected   = computeProjected(totExp, dayNow, daysInMonth);
-
-  const alerts  = useMemo(() => computeAlerts(categories,  expByCat, effBudgets), [categories,  expByCat, effBudgets]);
-  const pieData = useMemo(() => computePieData(categories, expByCat),              [categories,  expByCat]);
-  const barData = useMemo(() => computeBarData(categories, expByCat, effBudgets), [categories,  expByCat, effBudgets]);
-
-  const noteKey = `${selYear}-${selMonth}`;
-
-  // ── ACTIONS: movements ────────────────────────────────────────────────────
-  const delExp = useCallback(id => {
-    const u = deleteExpense(expenses, id); setExpenses(u); persist({ expenses: u });
-  }, [expenses, persist]);
-
-  const delInc = useCallback(id => {
-    const u = deleteIncome(incomes, id); setIncomes(u); persist({ incomes: u });
-  }, [incomes, persist]);
-
-  const editExpenseFn = useCallback((id, updates) => {
-    const u = editExpense(expenses, id, updates); setExpenses(u); persist({ expenses: u });
-  }, [expenses, persist]);
-
-  const editIncomeFn = useCallback((id, updates) => {
-    const u = editIncome(incomes, id, updates); setIncomes(u); persist({ incomes: u });
-  }, [incomes, persist]);
-
-  const addExpenseFn = useCallback(exp => {
-    const u = addExpense(expenses, exp); setExpenses(u); persist({ expenses: u });
-  }, [expenses, persist]);
-
-  const addIncomeFn = useCallback(form => {
-    const u = addIncome(incomes, form, selMonth, selYear); setIncomes(u); persist({ incomes: u });
-  }, [incomes, selMonth, selYear, persist]);
-
-  const addIncomeQuick = useCallback(inc => {
-    const u = [...incomes, inc]; setIncomes(u); persist({ incomes: u });
-  }, [incomes, persist]);
-
-  // ── ACTIONS: budgets ──────────────────────────────────────────────────────
-  const saveBudget = useCallback((cat, val) => {
-    const u = applyBudgetOverride(overrides, selYear, selMonth, cat, val);
-    setOverrides(u); persist({ budgetOverrides: u });
-  }, [overrides, selYear, selMonth, persist]);
-
-  const saveIncBudget = useCallback((cat, val) => {
-    const u = applyBudgetOverride(incomeOverrides, selYear, selMonth, cat, val);
-    setIncomeOverrides(u); persist({ incomeBudgetOverrides: u });
-  }, [incomeOverrides, selYear, selMonth, persist]);
-
-  // ── ACTIONS: categories ───────────────────────────────────────────────────
-  const addCategory = useCallback(cat => {
-    if (!cat.name.trim() || categories.find(c => c.name.toLowerCase() === cat.name.trim().toLowerCase())) return;
-    const u = [...categories, { ...cat, name: cat.name.trim() }];
-    setCategories(u); persist({ categories: u });
-  }, [categories, persist]);
-
-  const deleteCategory = useCallback(name => {
-    const u = categories.filter(c => c.name !== name);
-    setCategories(u); persist({ categories: u });
-  }, [categories, persist]);
-
-  const addIncomeCategory = useCallback(cat => {
-    if (!cat.name.trim() || incomeCategories.find(c => c.name.toLowerCase() === cat.name.trim().toLowerCase())) return;
-    const newCats = [...incomeCategories, { ...cat, name: cat.name.trim() }];
-    const newBase = { ...incomeBase, [cat.name.trim()]: 0 };
-    setIncomeCategories(newCats); setIncomeBase(newBase);
-    persist({ incomeCategories: newCats, incomeBaseBudgets: newBase });
-  }, [incomeCategories, incomeBase, persist]);
-
-  const deleteIncomeCategory = useCallback(name => {
-    const u = incomeCategories.filter(c => c.name !== name);
-    setIncomeCategories(u); persist({ incomeCategories: u });
-  }, [incomeCategories, persist]);
-
-  // ── ACTIONS: cards ────────────────────────────────────────────────────────
-  const addCard = useCallback(card => {
-    const u = [...creditCards, { id: Date.now(), ...card }];
-    setCreditCards(u); persist({ creditCards: u });
-  }, [creditCards, persist]);
-
-  // ── ACTIONS: savings accounts ─────────────────────────────────────────────
-  const addSavingsAccountFn = useCallback(form => {
-    const u = addSavingsAccount(savingsAccounts, form);
-    if (u === savingsAccounts) return;
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  const deleteSavingsAccountFn = useCallback(id => {
-    const u = deleteSavingsAccount(savingsAccounts, id);
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  const addSavTx = useCallback((accId, txForm) => {
-    const u = addSavingsTx(savingsAccounts, accId, txForm, todayStr);
-    if (u === savingsAccounts) return;
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  const deleteSavTx = useCallback((accId, txId) => {
-    const u = deleteSavingsTx(savingsAccounts, accId, txId);
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  const saveSavAccName = useCallback((id, name) => {
-    const u = renameSavingsAccount(savingsAccounts, id, name);
-    if (u === savingsAccounts) return;
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  const saveSavAccCurrency = useCallback((id, currency) => {
-    const u = setSavingsAccountCurrency(savingsAccounts, id, currency);
-    setSavingsAccounts(u); persist({ savingsAccounts: u });
-  }, [savingsAccounts, persist]);
-
-  // ── ACTIONS: notes ────────────────────────────────────────────────────────
-  const updateNote = useCallback(val => {
-    const u = { ...notes, [noteKey]: val };
-    setNotes(u);
-    return u;
-  }, [notes, noteKey]);
-
-  const saveNote = useCallback(() => persist({ monthNotes: notes }), [persist, notes]);
-
-  // ── EXPORT (browser APIs — not domain) ───────────────────────────────────
+  // ── Export (browser APIs — no domain logic) ────────────────────────────────
   const [exportToast, setExportToast] = useState('');
 
   const exportCSV = useCallback(() => {
     const esc = v => String(v ?? '').replace(/"/g, '""');
     const row = arr => arr.map(c => `"${esc(c)}"`).join(',') + '\n';
     let csv = '﻿';
-    csv += 'DUPLA\n\n=== EGRESOS ===\n' + row(['Fecha', 'Descripción', 'Categoría', 'Medio de pago', 'Cuotas', 'Persona', 'Monto']);
+    csv += 'DUPLA\n\n=== EGRESOS ===\n' + row(['Fecha','Descripción','Categoría','Medio de pago','Cuotas','Persona','Monto']);
     [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(e =>
       csv += row([e.date, e.description, e.category, e.paymentMethod || 'Efectivo', e.installments || 1, e.user, e.amount])
     );
-    csv += '\n=== INGRESOS ===\n' + row(['Mes', 'Año', 'Descripción', 'Persona', 'Monto']);
-    incomes.forEach(i => csv += row([MONTHS_FULL[i.month], i.year, i.description, i.user, i.amount]));
+    csv += '\n=== INGRESOS ===\n' + row(['Fecha','Descripción','Categoría','Persona','Monto']);
+    incomes.forEach(i => csv += row([i.fecha, i.description, i.incomeCategory, i.user, i.amount]));
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
     Object.assign(document.createElement('a'), { href: url, download: 'dupla.csv' }).click();
     URL.revokeObjectURL(url);
   }, [expenses, incomes]);
@@ -332,47 +678,46 @@ export function useDuplaData({ token, userId, onLogout }) {
   const exportGSheets = useCallback(() => {
     const t = '\t', nl = '\n';
     const row = arr => arr.join(t) + nl;
-    let tsv = 'EGRESOS' + nl + row(['Fecha', 'Descripción', 'Categoría', 'Medio de pago', 'Cuotas', 'Persona', 'Monto']);
+    let tsv = 'EGRESOS' + nl + row(['Fecha','Descripción','Categoría','Medio de pago','Cuotas','Persona','Monto']);
     [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(e =>
       tsv += row([e.date, e.description || '', e.category, e.paymentMethod || 'Efectivo', e.installments || 1, e.user, e.amount])
     );
-    tsv += nl + 'INGRESOS' + nl + row(['Mes', 'Año', 'Descripción', 'Persona', 'Monto']);
-    incomes.forEach(i => tsv += row([MONTHS_FULL[i.month], i.year, i.description || '', i.user, i.amount]));
+    tsv += nl + 'INGRESOS' + nl + row(['Fecha','Descripción','Categoría','Persona','Monto']);
+    incomes.forEach(i => tsv += row([i.fecha, i.description || '', i.incomeCategory, i.user, i.amount]));
     navigator.clipboard.writeText(tsv)
       .then(() => { setExportToast('✓ Copiado — pegá en Google Sheets'); setTimeout(() => setExportToast(''), 3000); })
-      .catch(() => { setExportToast('No se pudo copiar'); setTimeout(() => setExportToast(''), 3000); });
+      .catch(() => { setExportToast('No se pudo copiar');                  setTimeout(() => setExportToast(''), 3000); });
   }, [expenses, incomes]);
 
-  // ── PUBLIC API ────────────────────────────────────────────────────────────
+  // ── Public API ─────────────────────────────────────────────────────────────
   return {
     // sync
-    loading, syncing, lastSync, syncError,
+    loading, syncing, lastSync, syncError, refresh,
     // nav
     selMonth, selYear, setSelMonth, setSelYear,
     // settings
     billingDayOfMonth, saveBillingDay,
     userNames, saveUserNames,
     exchangeRate, saveExchangeRate,
-    // raw data (read-only for tabs)
-    expenses, incomes, savingGoals, categories, incomeCategories,
-    creditCards, savingsAccounts, overrides, incomeOverrides, notes,
+    // raw new-model arrays (for future tab migration)
+    gastos, ingresos, categorias, tarjetas, recurrentes, cuentas, transacciones,
+    // backward-compat arrays (existing tabs keep working)
+    expenses, incomes,
+    categories, incomeCategories,
+    creditCards, savingsAccounts,
     // derived
-    paymentMethods,
-    effBudgets, effIncBudgets,
     filtExp, filtInc,
-    totExp, totInc, totSav, savingsTotal, totExpPrevMonth,
-    balance, totBudget,
+    effBudgets, effIncBudgets,
+    totExp, totInc, totExpPrevMonth, balance, totBudget, savingsTotal,
     expByCat, incByCat, expByUser,
     annualData, daysInMonth, dayNow, projected,
     alerts, pieData, barData,
-    prevMonth, prevYear, noteKey,
-    // actions: movements
-    delExp, delInc,
-    editExpense: editExpenseFn,
-    editIncome: editIncomeFn,
-    addExpense: addExpenseFn,
-    addIncome: addIncomeFn,
-    addIncomeQuick,
+    prevMonth, prevYear,
+    recurrentesPendientes,
+    // actions: expenses
+    addExpense, editExpense, delExp,
+    // actions: incomes
+    addIncome, addIncomeQuick, editIncome, delInc,
     // actions: budgets
     saveBudget, saveIncBudget,
     // actions: categories
@@ -381,20 +726,22 @@ export function useDuplaData({ token, userId, onLogout }) {
     // actions: cards
     addCard,
     // actions: savings
-    addSavingsAccount: addSavingsAccountFn,
-    deleteSavingsAccount: deleteSavingsAccountFn,
-    addSavTx, deleteSavTx,
-    saveSavAccName, saveSavAccCurrency,
-    getAccBalance: getAccountBalance,
-    // actions: notes
-    updateNote, saveNote,
+    addSavingsAccount, deleteSavingsAccount,
+    addSavTx, deleteSavTx, getAccBalance,
+    saveSavAccCurrency, saveSavAccName,
+    // actions: recurrentes
+    applyRecurrente,
     // export
     exportCSV, exportGSheets, exportToast,
     // sheet management
-    getSheetId, setManualSheetId,
-    // low-level persist (exposed for tabs that call it directly)
-    persist,
-    // utils forwarded for backward compat with shared object
+    getSheetId:      () => repo?.getSheetId(),
+    setManualSheetId: id => repo?.setManualSheetId(id),
+    // utils forwarded for backward compat
     fmt, fmtK,
+    // legacy no-ops (consumed by some tabs, no longer needed)
+    persist: async () => {},
+    overrides: {}, incomeOverrides: {},
+    noteKey: '', notes: {},
+    updateNote: () => {}, saveNote: async () => {},
   };
 }

@@ -50,3 +50,47 @@ input[type=number]::-webkit-outer-spin-button {
   from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* ── Motion System v1 keyframes ──────────────────────────────────────────────
+ *
+ * Added by the Dupla Motion System. Do NOT edit timing here — timing lives
+ * in src/motion/tokens.js (DURATIONS / EASINGS). Only the shape of the
+ * animation (from/to values) is defined here.
+ *
+ * Naming convention: dupla-{semantic-name}
+ * All names are registered as constants in src/motion/tokens.js (KEYFRAMES).
+ */
+
+/* Tab content entrance — neutral (no directional context, e.g. initial load). */
+@keyframes dupla-tab-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Directional carousel transitions — used by TransitionSwitch when navigating
+ * between tabs. Direction is determined by comparing tab positions in the nav.
+ * 80px offset ≈ 15% of the 520px max container — clear signal, not theatrical. */
+@keyframes dupla-tab-from-right {
+  from { opacity: 0; transform: translateX(80px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes dupla-tab-from-left {
+  from { opacity: 0; transform: translateX(-80px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Floating surface entrance — dropdowns, user menu, contextual panels.
+ * Combines scale + translateY to give the impression of "rising from trigger".
+ * Scale range: 0.97→1 (subtle, not theatrical). */
+@keyframes dupla-float-in {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+/* Exit animation for elements leaving the floating surface plane.
+ * Exits are faster than entrances — use with DURATIONS.fast (140ms).
+ * Compress toward origin (scale down) rather than flying away. */
+@keyframes dupla-collapse-out {
+  from { opacity: 1; transform: scale(1)    translateY(0); }
+  to   { opacity: 0; transform: scale(0.97) translateY(4px); }
+}

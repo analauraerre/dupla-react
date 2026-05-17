@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useTheme } from '../../context/ThemeContext';
+﻿import { useState } from 'react';
+import { useTheme } from '../../hooks/useTheme';
 
 export default function CardsTab({ creditCards, expenses, selMonth, selYear, fmt, addCard }) {
   const { C, Sx } = useTheme();
@@ -33,7 +33,7 @@ export default function CardsTab({ creditCards, expenses, selMonth, selYear, fmt
         </div>
       )}
 
-      {!creditCards.length && <div style={Sx.empty}>Sin tarjetas registradas 💳<br /><span style={{ fontSize: 13, color: C.gray3 }}>Agregá una para ver sus movimientos</span></div>}
+      {!creditCards.length && <div style={Sx.empty}>Sin tarjetas registradas<br /><span style={{ fontSize: 13, color: C.gray3 }}>Agregá una para ver sus movimientos</span></div>}
 
       {creditCards.map(card => {
         const cardExp = expenses.filter(e => e.paymentMethod === card.name);
@@ -49,7 +49,7 @@ export default function CardsTab({ creditCards, expenses, selMonth, selYear, fmt
         return (
           <div key={card.id} style={{ ...Sx.erow, flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
-              <div style={{ width: 46, height: 46, borderRadius: 16, background: C.lavL, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>💳</div>
+              <div style={{ width: 46, height: 46, borderRadius: 16, background: C.lavL, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>$</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 16, color: C.gray1 }}>{card.name}</div>
                 {card.limit > 0 && (

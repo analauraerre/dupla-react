@@ -1,19 +1,19 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { MONTHS, MONTHS_FULL, PALETTE, ICON_OPTIONS } from '../../utils/constants';
-import { useTheme } from '../../context/ThemeContext';
+import { useTheme } from '../../hooks/useTheme';
 import PieChartSVG from '../charts/PieChartSVG';
 import BarChartSVG from '../charts/BarChartSVG';
 import LineChartSVG from '../charts/LineChartSVG';
 
 export default function ChartsTab({
   selMonth, selYear, categories, expenses, incomes,
-  filtExp, totExp, effBudgets, expByCat, pieData, barData,
+  totExp, pieData, barData,
   fmt, addCategory, deleteCategory,
 }) {
   const { C, Sx } = useTheme();
   const [chartView,    setChartView]    = useState('pie');
   const [showCatMgr,  setShowCatMgr]   = useState(false);
-  const [newCat,       setNewCat]       = useState({ name: '', icon: '⭐', color: C.sage, bg: C.sageL });
+  const [newCat,       setNewCat]       = useState({ name: '', icon: '*', color: C.sage, bg: C.sageL });
   const [showIconPick, setShowIconPick] = useState(false);
   const [delCat,       setDelCat]       = useState(null);
 
@@ -39,7 +39,7 @@ export default function ChartsTab({
           <button
             onClick={() => setShowCatMgr(v => !v)}
             style={{ padding: '7px 12px', borderRadius: 8, border: '0.5px solid rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
-          >{showCatMgr ? '✕ Cerrar' : '⚙ Categorías'}</button>
+          >{showCatMgr ? 'x Cerrar' : 'Categorías'}</button>
         </div>
       </div>
 
@@ -57,7 +57,7 @@ export default function ChartsTab({
                     <button onClick={() => { deleteCategory(cat.name); setDelCat(null); }} style={{ padding: '4px 10px', background: C.coral, color: C.white, border: 'none', borderRadius: 8, fontSize: 11, cursor: 'pointer' }}>Sí</button>
                     <button onClick={() => setDelCat(null)} style={{ padding: '4px 10px', background: C.gray5, border: 'none', borderRadius: 8, fontSize: 11, cursor: 'pointer' }}>No</button>
                   </div>
-                ) : <button onClick={() => setDelCat(cat.name)} style={Sx.xbtn}>×</button>}
+                ) : <button onClick={() => setDelCat(cat.name)} style={Sx.xbtn}>x</button>}
               </div>
             ))}
           </div>
@@ -65,17 +65,17 @@ export default function ChartsTab({
             <div style={{ fontSize: 13, fontWeight: 700, color: C.gray1, marginBottom: 10 }}>Nueva categoría</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
               <button onClick={() => setShowIconPick(v => !v)} style={{ width: 46, height: 46, borderRadius: 14, border: `1.5px solid ${C.border}`, background: newCat.bg, fontSize: 22, cursor: 'pointer', flexShrink: 0 }}>{newCat.icon}</button>
-              <input style={{ ...Sx.inp, flex: 1 }} placeholder="Nombre" value={newCat.name} onChange={e => setNewCat(p => ({ ...p, name: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') { addCategory(newCat); setNewCat({ name: '', icon: '⭐', color: C.sage, bg: C.sageL }); } }} />
+              <input style={{ ...Sx.inp, flex: 1 }} placeholder="Nombre" value={newCat.name} onChange={e => setNewCat(p => ({ ...p, name: e.target.value }))} onKeyDown={e => { if (e.key === 'Enter') { addCategory(newCat); setNewCat({ name: '', icon: '*', color: C.sage, bg: C.sageL }); } }} />
             </div>
             {showIconPick && (<div style={{ background: C.gray6, borderRadius: 14, padding: 12, marginBottom: 10 }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{ICON_OPTIONS.map(ic => <button key={ic} onClick={() => { setNewCat(p => ({ ...p, icon: ic })); setShowIconPick(false); }} style={{ width: 38, height: 38, borderRadius: 10, border: `1.5px solid ${newCat.icon === ic ? C.coral : C.border}`, background: newCat.icon === ic ? C.coralL : C.white, fontSize: 20, cursor: 'pointer' }}>{ic}</button>)}</div></div>)}
             <div style={{ marginBottom: 12 }}><div style={{ fontSize: 12, color: C.gray3, marginBottom: 8, fontWeight: 600 }}>Color</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{PALETTE.map(col => <button key={col} onClick={() => setNewCat(p => ({ ...p, color: col, bg: col + '22' }))} style={{ width: 28, height: 28, borderRadius: '50%', background: col, border: newCat.color === col ? `3px solid ${C.gray1}` : `3px solid ${C.white}`, cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.12)' }} />)}</div></div>
-            <button style={{ ...Sx.btn, width: '100%' }} onClick={() => { addCategory(newCat); setNewCat({ name: '', icon: '⭐', color: C.sage, bg: C.sageL }); }}>+ Agregar categoría</button>
+            <button style={{ ...Sx.btn, width: '100%' }} onClick={() => { addCategory(newCat); setNewCat({ name: '', icon: '*', color: C.sage, bg: C.sageL }); }}>+ Agregar categoría</button>
           </div>
         </div>
       )}
 
       <div style={Sx.chipRow}>
-        {[{ id: 'pie', l: '🥧 Por rubro' }, { id: 'bar', l: '📊 vs Presupuesto' }, { id: 'trend', l: '📈 Tendencia' }].map(c => (
+        {[{ id: 'pie', l: 'Por rubro' }, { id: 'bar', l: 'vs Presupuesto' }, { id: 'trend', l: 'Tendencia' }].map(c => (
           <button key={c.id} onClick={() => setChartView(c.id)} style={{ padding: '8px 14px', borderRadius: 24, border: `1.5px solid ${chartView === c.id ? C.coral : C.border}`, background: chartView === c.id ? C.coralL : C.white, color: chartView === c.id ? C.coral : C.gray2, fontSize: 12, fontWeight: chartView === c.id ? 700 : 500, cursor: 'pointer' }}>{c.l}</button>
         ))}
       </div>

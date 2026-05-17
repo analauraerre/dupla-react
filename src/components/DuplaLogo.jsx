@@ -12,8 +12,6 @@
 //   <DuplaLogo variant="full" inverted /> → para fondos oscuros
 // ============================================
 
-import React from "react";
-
 const COLORS = {
   green:    "#0F7B5C",
   coral:    "#FF6B5B",
