@@ -14,7 +14,7 @@ import ChartsTab from './components/tabs/ChartsTab';
 import CardsTab from './components/tabs/CardsTab';
 
 import { useGoogleSheets } from './hooks/useGoogleSheets';
-import { useTheme, contrastFg } from './context/ThemeContext';
+import { useTheme } from './hooks/useTheme';
 import {
   SEED, DEFAULT_CATEGORIES, DEFAULT_INCOME_CATEGORIES,
   PAYMENT_METHODS_FIXED, MONTHS, MONTHS_FULL,
@@ -34,7 +34,9 @@ function MasPanel({
   exchangeRate, saveExchangeRate,
   exportCSV, exportGSheets, exportToast,
   onLogout, userInfo,
+  getSheetId, setManualSheetId,
 }) {
+  const [sheetInput, setSheetInput] = useState(() => getSheetId() || '');
   const { C, Sx } = useTheme();
   return (
     <div>
@@ -172,6 +174,45 @@ function MasPanel({
         )}
       </div>
 
+      {/* ── VINCULAR SHEET ── */}
+      <div style={{ fontSize: 13, fontWeight: 500, color: C.gray3, marginBottom: 10, letterSpacing: '0.4px', textTransform: 'uppercase' }}>Google Sheet</div>
+      <div style={{ ...Sx.fcard, marginBottom: 20 }}>
+        <div style={Sx.ft}>Vincular hoja de cálculo</div>
+        <div style={{ fontSize: 12, color: C.gray3, marginBottom: 10, lineHeight: 1.5 }}>
+          Pegá el link de compartir de Google Sheets. Dejalo vacío para usar tu propio Sheet.
+        </div>
+        <input
+          type="text"
+          placeholder="https://docs.google.com/spreadsheets/d/..."
+          value={sheetInput}
+          onChange={e => setSheetInput(e.target.value)}
+          style={{ ...Sx.inp, marginBottom: 6, fontSize: 12 }}
+        />
+        {sheetInput && (() => {
+          const match = sheetInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+          return match
+            ? <div style={{ fontSize: 11, color: C.sage, marginBottom: 10 }}>ID detectado: {match[1]}</div>
+            : <div style={{ fontSize: 11, color: C.rose, marginBottom: 10 }}>URL no reconocida</div>;
+        })()}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => {
+              const match = sheetInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+              const id = match ? match[1] : sheetInput.trim();
+              setManualSheetId(id);
+              window.location.reload();
+            }}
+            style={{ ...Sx.btn, flex: 1, fontSize: 13 }}>
+            Aplicar
+          </button>
+          <button
+            onClick={() => { setSheetInput(''); setManualSheetId(''); window.location.reload(); }}
+            style={{ ...Sx.btn, flex: 1, fontSize: 13, background: C.gray4 }}>
+            Resetear
+          </button>
+        </div>
+      </div>
+
       {/* Logout */}
       <button onClick={onLogout}
         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px',
@@ -190,8 +231,8 @@ function MasPanel({
 
 // ── INNER APP (after auth) ─────────────────────────────────────────────────────
 function DuplaApp({ token, userInfo, onLogout, showSplash }) {
-  const { C, Sx, themeId, setThemeId, THEME_LIST, fontScale, setFontScale } = useTheme();
-  const { load, save } = useGoogleSheets(token);
+  const { C, themeId, setThemeId, THEME_LIST, fontScale, setFontScale } = useTheme();
+  const { load, save, setManualSheetId, getSheetId } = useGoogleSheets(token, userInfo?.sub);
 
   // ── NAV ──
   const [tab, setTab]     = useState('home');
@@ -202,6 +243,7 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
   const [loading,  setLoading]  = useState(true);
   const [syncing,  setSyncing]  = useState(false);
   const [lastSync, setLastSync] = useState(null);
+  const [syncError, setSyncError] = useState('');
 
   // ── SETTINGS ──
   const [billingDayOfMonth, setBillingDayOfMonth] = useState(() => {
@@ -235,16 +277,6 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
   const paymentMethods = useMemo(() => [...PAYMENT_METHODS_FIXED, ...creditCards.map(c => c.name)], [creditCards]);
   const getCat = useCallback(name => categories.find(c => c.name === name) || { icon: '📦', color: C.gray3, bg: C.gray6, name }, [categories, C]);
 
-  // Helper: Get expenses for billing cycle (starting from billingDayOfMonth)
-  const getExpensesForCycle = useCallback((month, year) => {
-    const firstDay = new Date(year, month, billingDayOfMonth);
-    const lastDay = new Date(year, month + 1, billingDayOfMonth - 1);
-    return expenses.filter(e => {
-      const d = new Date(e.date + 'T00:00:00');
-      return d >= firstDay && d <= lastDay;
-    });
-  }, [expenses, billingDayOfMonth]);
-
   // Save settings to localStorage
   const saveBillingDay = (day) => {
     setBillingDayOfMonth(day);
@@ -262,13 +294,20 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
 
   const persist = useCallback(async (updates = {}) => {
     setSyncing(true);
+    setSyncError('');
     const state = {
       expenses, incomes, savingGoals, baseBudgets: base, budgetOverrides: overrides,
       categories, incomeCategories, incomeBaseBudgets: incomeBase, incomeBudgetOverrides: incomeOverrides,
       recurringExpenses: recurring, monthNotes: notes, creditCards, splits, savingsAccounts,
       ...updates
     };
-    try { await save(state); setLastSync(new Date()); } catch (e) { console.error('Save error', e); }
+    try {
+      await save(state);
+      setLastSync(new Date());
+    } catch (e) {
+      console.error('[Dupla] Save error', e);
+      setSyncError('No pudimos guardar los cambios. Revisá tu conexión y volvé a intentar.');
+    }
     setSyncing(false);
   }, [expenses, incomes, savingGoals, base, overrides, categories, incomeCategories, incomeBase, incomeOverrides, recurring, notes, creditCards, splits, savingsAccounts, save]);
 
@@ -292,7 +331,13 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
 
   // ── LOAD ──
   useEffect(() => {
-    load().then(d => {
+    load().then(result => {
+      if (!result.ok) {
+        console.warn('[Dupla] Invalid persisted data, using safe defaults', result.issues || result.error);
+        setSyncError('Los datos guardados no tienen el formato esperado. Cargamos una base segura sin sobrescribir tu Sheet.');
+      }
+
+      const d = result.data;
       if (d && d.expenses) {
         const rec = d.recurringExpenses || [];
         const exp = d.expenses || [];
@@ -308,16 +353,25 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
         // Normalize: accounts without currency default to 'ARS'
         setSavingsAccounts((d.savingsAccounts || []).map(a => ({ ...a, currency: a.currency || 'ARS' })));
         setLastSync(new Date());
-        if (auto.length) save({ ...d, expenses: finalExp });
+        if (result.ok && (auto.length || result.migrated)) {
+          save({ ...d, expenses: finalExp }).catch(error => {
+            console.error('[Dupla] Migration save error', error);
+            setSyncError('Los datos cargaron bien, pero no pudimos guardar la migración automática.');
+          });
+        }
       }
       setLoading(false);
     }).catch((err) => {
       if (err?.message === 'AUTH_EXPIRED') {
-        onLogout(); // token vencido → volver al login
+        onLogout();
+      }
+      if (err?.message !== 'AUTH_EXPIRED') {
+        console.error('[Dupla] Load error', err);
+        setSyncError('No pudimos conectar con Google Sheets. Revisá tu conexión o iniciá sesión nuevamente.');
       }
       setLoading(false);
     });
-  }, []);
+  }, [applyRecurring, load, onLogout, save]);
 
   // ── DERIVED ──
   const effBudgets    = useMemo(() => { const r = {}; categories.forEach(c => { r[c.name] = effectiveBudget(c.name, selMonth, selYear, base, overrides); }); return r; }, [categories, selMonth, selYear, base, overrides]);
@@ -461,6 +515,11 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
   return (
     <div style={{ fontFamily: "'Helvetica Neue',Arial,sans-serif", background: C.gray6, minHeight: '100vh', maxWidth: 520, margin: '0 auto' }}>
       <Header selMonth={selMonth} selYear={selYear} setSelMonth={setSelMonth} setSelYear={setSelYear} syncing={syncing} lastSync={lastSync} alerts={alerts} userInfo={userInfo} onLogout={onLogout} setTab={setTab} />
+      {syncError && (
+        <div style={{ margin: '12px 16px 0', padding: '10px 12px', borderRadius: 10, background: C.roseL, color: C.rose, border: `0.5px solid ${C.rose}44`, fontSize: 12, lineHeight: 1.4 }}>
+          {syncError}
+        </div>
+      )}
       <div style={{ padding: '16px 16px 0', paddingBottom: 96 }}>
         <div style={{ zoom: fontScale }}>
           {tab === 'home'      && <HomeTab      {...shared} />}
@@ -478,6 +537,7 @@ function DuplaApp({ token, userInfo, onLogout, showSplash }) {
             exchangeRate={exchangeRate} saveExchangeRate={saveExchangeRate}
             exportCSV={exportCSV} exportGSheets={exportGSheets} exportToast={exportToast}
             onLogout={onLogout} userInfo={userInfo}
+            getSheetId={getSheetId} setManualSheetId={setManualSheetId}
           />}
         </div>
       </div>
@@ -492,22 +552,26 @@ export default function App() {
   const [userInfo,   setUserInfo]   = useState(() => { try { return JSON.parse(localStorage.getItem('dupla_user') || 'null'); } catch { return null; } });
   const [showSplash, setShowSplash] = useState(true);
 
-  const handleLogin = async (accessToken) => {
+  const handleLogin = useCallback(async (accessToken) => {
     setToken(accessToken);
     localStorage.setItem('dupla_token', accessToken);
     try {
       const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${accessToken}` } });
       const info = await res.json();
       setUserInfo(info); localStorage.setItem('dupla_user', JSON.stringify(info));
-    } catch {}
-  };
+    } catch (error) {
+      console.warn('[Dupla] Could not load Google profile', error);
+    }
+  }, []);
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
+    const sub = userInfo?.sub;
     setToken(null); setUserInfo(null);
     localStorage.removeItem('dupla_token');
     localStorage.removeItem('dupla_user');
-    localStorage.removeItem('dupla_sheet_id');
-  };
+    localStorage.removeItem('dupla_sheet_id'); // legacy key
+    if (sub) localStorage.removeItem(`dupla_sheet_id_${sub}`);
+  }, [userInfo]);
 
   return (
     <GoogleOAuthProvider clientId={CLIENT_ID || ''}>
